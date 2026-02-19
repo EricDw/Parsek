@@ -294,6 +294,7 @@ fun <I : Any, O : Any, R : Any, U : Any> pBind(
  *
  * @see pBind
  * @see pAnd
+ * @see pMany
  */
 fun <I : Any, O : Any, U : Any> pRepeat(
     count: Int,
@@ -306,6 +307,64 @@ fun <I : Any, O : Any, U : Any> pRepeat(
             when (val result = parser(current)) {
                 is Failure -> return@Parser result
                 is Success -> {
+                    values.add(result.value)
+                    current = ParserInput(input.input, result.nextIndex, input.userContext)
+                }
+            }
+        }
+        Success(values, current.index, input)
+    }
+
+/**
+ * Returns a [Parser] that runs [parser] repeatedly until it fails, collecting
+ * each output into a [List]. Always succeeds, returning an empty list if
+ * [parser] fails on the first attempt.
+ *
+ * `pMany` is the zero-or-more repetition combinator. For one-or-more, pair it
+ * with an initial required match using [pAnd] or [pBind].
+ *
+ * > **Note:** [parser] must consume at least one token on each success. If it
+ * > succeeds without advancing the index, `pMany` stops immediately to prevent
+ * > an infinite loop.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] fails on first attempt | [Success] with an empty list; index unchanged |
+ * | [parser] succeeds N times then fails | [Success] with N values; index advanced past all |
+ * | [parser] succeeds without advancing | [Success] with values collected so far; loop stops |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser]; each successful value is collected.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val letter = pSatisfy<Char, Unit> { it.isLetter() }
+ * val word = pMany(letter)
+ *
+ * val input = ParserInput.of("abc!".toList(), Unit)
+ * val result = word(input)  // Success(['a','b','c'], nextIndex=3, ...)
+ * ```
+ *
+ * @param parser the parser to run repeatedly.
+ * @return a [Parser] that always succeeds with a (possibly empty) list of values.
+ *
+ * @see pRepeat
+ * @see pAnd
+ */
+fun <I : Any, O : Any, U : Any> pMany(
+    parser: Parser<I, O, U>,
+): Parser<I, List<O>, U> =
+    Parser { input ->
+        val values = mutableListOf<O>()
+        var current = input
+        while (true) {
+            when (val result = parser(current)) {
+                is Failure -> break
+                is Success -> {
+                    if (result.nextIndex == current.index) break
                     values.add(result.value)
                     current = ParserInput(input.input, result.nextIndex, input.userContext)
                 }
