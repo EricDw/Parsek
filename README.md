@@ -2,6 +2,13 @@
 
 A Kotlin Multiplatform parser combinator library.
 
+## Modules
+
+| Module | Artifact | Description |
+|---|---|---|
+| `:core` | `com.dewildte.parsek:parsek-core` | Generic combinators (`Parser`, `ParserInput`, `ParseResult`, `satisfy`) |
+| `:text` | `com.dewildte.parsek:parsek-text` | Text/character parsers (`char`); depends on `:core` |
+
 ## Overview
 
 Parsek is built around three core types:
@@ -25,18 +32,30 @@ The input type `I` and output type `O` are independent, so parsers can transform
 
 ## Usage
 
-### `satisfy`
+### `pSatisfy` (`:core`)
 
 Consumes one element from the input if it matches a predicate.
 
 ```kotlin
-val isDigit: Parser<Char, Char> = satisfy { it.isDigit() }
+import parsek.*
+
+val isDigit: Parser<Char, Char> = pSatisfy { it.isDigit() }
 
 val input = ParserInput.of("123".toList())
 when (val result = isDigit(input)) {
     is Success -> println(result.value)   // '1'
     is Failure -> println(result.message)
 }
+```
+
+### `pChar` (`:text`)
+
+Matches a specific character.
+
+```kotlin
+import parsek.text.pChar
+
+val excl: Parser<Char, Char> = pChar('!')
 ```
 
 ### Chaining parsers
@@ -58,11 +77,14 @@ val second = isDigit(ParserInput(input.input, first.nextIndex)) // Success('2', 
 ### Running tests
 
 ```bash
-# All desktop targets (JVM + macOS native)
-./gradlew jvmTest macosArm64Test macosX64Test
+# Core tests
+./gradlew :core:jvmTest
 
-# Single target
-./gradlew jvmTest
+# All desktop targets
+./gradlew :core:jvmTest :core:macosArm64Test :core:macosX64Test
+
+# Full multi-module build
+./gradlew build
 ```
 
 An IntelliJ **Desktop Tests** run configuration is included in the repo.

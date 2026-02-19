@@ -7,14 +7,14 @@ import kotlin.test.assertSame
 
 class SatisfyTest {
 
-    private val digits = ParserInput.of("0123456789".toList())
+    private val digits = ParserInput.of("0123456789".toList(), Unit)
     private val isDigit: (Char) -> Boolean = { it.isDigit() }
 
     @Test
     fun successOnMatchingElement() {
-        val parser = satisfy(isDigit)
+        val parser = pSatisfy<Char, Unit>(isDigit)
         val result = parser(digits)
-        assertIs<Success<Char, Char>>(result)
+        assertIs<Success<Char, Char, Unit>>(result)
         assertEquals('0', result.value)
         assertEquals(1, result.nextIndex)
         assertSame(digits, result.input)
@@ -22,19 +22,19 @@ class SatisfyTest {
 
     @Test
     fun failureOnNonMatchingElement() {
-        val parser = satisfy<Char> { it == 'z' }
+        val parser = pSatisfy<Char, Unit> { it == 'z' }
         val result = parser(digits)
-        assertIs<Failure<Char>>(result)
+        assertIs<Failure<Char, Unit>>(result)
         assertEquals(0, result.index)
         assertSame(digits, result.input)
     }
 
     @Test
     fun failureAtEndOfInput() {
-        val parser = satisfy(isDigit)
-        val empty = ParserInput.of(emptyList<Char>())
+        val parser = pSatisfy<Char, Unit>(isDigit)
+        val empty = ParserInput.of(emptyList<Char>(), Unit)
         val result = parser(empty)
-        assertIs<Failure<Char>>(result)
+        assertIs<Failure<Char, Unit>>(result)
         assertEquals("Unexpected end of input", result.message)
         assertEquals(0, result.index)
         assertSame(empty, result.input)
@@ -42,11 +42,11 @@ class SatisfyTest {
 
     @Test
     fun advancesIndexOnConsecutiveParsing() {
-        val parser = satisfy(isDigit)
+        val parser = pSatisfy<Char, Unit>(isDigit)
         val first = parser(digits)
-        assertIs<Success<Char, Char>>(first)
-        val second = parser(ParserInput(digits.input, first.nextIndex))
-        assertIs<Success<Char, Char>>(second)
+        assertIs<Success<Char, Char, Unit>>(first)
+        val second = parser(ParserInput(digits.input, first.nextIndex, Unit))
+        assertIs<Success<Char, Char, Unit>>(second)
         assertEquals('1', second.value)
         assertEquals(2, second.nextIndex)
     }
