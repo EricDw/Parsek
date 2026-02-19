@@ -316,6 +316,46 @@ fun <I : Any, O : Any, U : Any> pRepeat(
     }
 
 /**
+ * Returns a [Parser] that runs [parser] one or more times, collecting each
+ * output into a [List]. Fails if [parser] does not match at least once.
+ *
+ * Equivalent to requiring one mandatory match followed by [pMany]: the first
+ * run of [parser] must succeed, after which further runs are collected until
+ * failure.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] fails on first attempt | [Failure] from [parser] |
+ * | [parser] succeeds N times then fails (N ≥ 1) | [Success] with N values; index advanced past all |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser]; each successful value is collected.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val digits = pMany1(digit)
+ *
+ * val input = ParserInput.of("42!".toList(), Unit)
+ * val result = digits(input)  // Success(['4','2'], nextIndex=2, ...)
+ * ```
+ *
+ * @param parser the parser to run one or more times.
+ * @return a [Parser] that succeeds with a non-empty list, or fails if [parser]
+ *   does not match at least once.
+ *
+ * @see pMany
+ * @see pRepeat
+ */
+fun <I : Any, O : Any, U : Any> pMany1(
+    parser: Parser<I, O, U>,
+): Parser<I, List<O>, U> =
+    pMap(pAnd(parser, pMany(parser))) { (first, rest) -> listOf(first) + rest }
+
+/**
  * Returns a [Parser] that runs [parser] repeatedly until it fails, collecting
  * each output into a [List]. Always succeeds, returning an empty list if
  * [parser] fails on the first attempt.
@@ -352,6 +392,7 @@ fun <I : Any, O : Any, U : Any> pRepeat(
  * @return a [Parser] that always succeeds with a (possibly empty) list of values.
  *
  * @see pRepeat
+ * @see pMany1
  * @see pAnd
  */
 fun <I : Any, O : Any, U : Any> pMany(
