@@ -294,6 +294,7 @@ fun <I : Any, O, R, U : Any> pBind(
  *
  * @see pBind
  * @see pAnd
+ * @see pSequence
  * @see pMany
  */
 fun <I : Any, O, U : Any> pRepeat(
@@ -304,6 +305,64 @@ fun <I : Any, O, U : Any> pRepeat(
         val values = ArrayList<O>(count)
         var current = input
         repeat(count) {
+            when (val result = parser(current)) {
+                is Failure -> return@Parser result
+                is Success -> {
+                    values.add(result.value)
+                    current = ParserInput(input.input, result.nextIndex, input.userContext)
+                }
+            }
+        }
+        Success(values, current.index, input)
+    }
+
+/**
+ * Returns a [Parser] that runs each parser in [parsers] in order, collecting
+ * every output into a [List].
+ *
+ * Unlike [pRepeat], which applies a single parser [count] times, `pSequence`
+ * applies a *different* parser at each position. The runs proceed left-to-right;
+ * each run starts where the previous one left off. If any parser fails the whole
+ * combined parser fails immediately at that position.
+ *
+ * An empty [parsers] list always succeeds with an empty list.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parsers] is empty | [Success] with an empty list; index unchanged |
+ * | All parsers succeed | [Success] with a list of values; index advanced past all |
+ * | Any parser fails | [Failure] from that parser |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by all parsers.
+ * - [O] — the shared output type; all parsers must produce the same type.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val letter = pSatisfy<Char, Unit> { it.isLetter() }
+ * val parser = pSequence(listOf(digit, letter, digit))
+ *
+ * val input = ParserInput.of("1a2".toList(), Unit)
+ * val result = parser(input)  // Success(['1','a','2'], nextIndex=3, ...)
+ * ```
+ *
+ * @param parsers the ordered list of parsers to run.
+ * @return a [Parser] that collects the output of each parser on success.
+ *
+ * @see pRepeat
+ * @see pAnd
+ * @see pMany
+ */
+fun <I : Any, O, U : Any> pSequence(
+    parsers: List<Parser<I, O, U>>,
+): Parser<I, List<O>, U> =
+    Parser { input ->
+        val values = ArrayList<O>(parsers.size)
+        var current = input
+        for (parser in parsers) {
             when (val result = parser(current)) {
                 is Failure -> return@Parser result
                 is Success -> {
