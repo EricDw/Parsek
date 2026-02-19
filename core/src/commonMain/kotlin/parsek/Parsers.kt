@@ -187,6 +187,7 @@ fun <I : Any, O : Any, U : Any> pOr(
  *
  * @see pAnd
  * @see pOr
+ * @see pBind
  */
 fun <I : Any, O : Any, R : Any, U : Any> pMap(
     parser: Parser<I, O, U>,
@@ -196,5 +197,62 @@ fun <I : Any, O : Any, R : Any, U : Any> pMap(
         when (val result = parser(input)) {
             is Failure -> result
             is Success -> Success(transform(result.value), result.nextIndex, result.input)
+        }
+    }
+
+/**
+ * Returns a [Parser] that runs [parser] and, on success, passes the output value
+ * to [transform] to obtain and immediately run a second parser.
+ *
+ * `pBind` is the monadic bind (also known as `flatMap`) for parsers. Unlike [pMap],
+ * the second parse step is not fixed in advance — it is chosen dynamically based on
+ * what the first parser produced. This makes it possible to write context-sensitive
+ * parsers whose structure depends on previously parsed values.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] fails | [Failure] propagated from [parser] |
+ * | [parser] succeeds, derived parser fails | [Failure] propagated from the derived parser |
+ * | Both succeed | [Success] from the derived parser |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by both parsers.
+ * - [O] — the output type of [parser]; passed to [transform].
+ * - [R] — the output type of the parser returned by [transform].
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * // Parse a digit that encodes how many letters follow, then parse exactly that many letters.
+ * val digit = pMap(pSatisfy<Char, Unit> { it.isDigit() }) { it.digitToInt() }
+ * val letter = pSatisfy<Char, Unit> { it.isLetter() }
+ *
+ * val parser = pBind(digit) { count ->
+ *     (2..count).fold(pMap(letter) { listOf(it) }) { acc, _ ->
+ *         pMap(pAnd(acc, letter)) { (list, ch) -> list + ch }
+ *     }
+ * }
+ *
+ * val input = ParserInput.of("2ab".toList(), Unit)
+ * val result = parser(input)  // Success(['a', 'b'], nextIndex=3, ...)
+ * ```
+ *
+ * @param parser the first parser to run.
+ * @param transform a function that receives the first parser's output and returns
+ *   the next parser to run; should be side-effect-free.
+ * @return a [Parser] that sequences [parser] and the parser produced by [transform].
+ *
+ * @see pMap
+ * @see pAnd
+ */
+fun <I : Any, O : Any, R : Any, U : Any> pBind(
+    parser: Parser<I, O, U>,
+    transform: (O) -> Parser<I, R, U>,
+): Parser<I, R, U> =
+    Parser { input ->
+        when (val result = parser(input)) {
+            is Failure -> result
+            is Success -> transform(result.value)(ParserInput(input.input, result.nextIndex, input.userContext))
         }
     }
