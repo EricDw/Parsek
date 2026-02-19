@@ -17,14 +17,14 @@ package parsek
  *
  * ### Type parameters
  * - [I] — the token type from the originating [ParserInput]. Covariant.
- * - [O] — the output value type on success. Covariant. [Failure] fixes this to
- *   [Nothing] so a `Failure<I, U>` is a subtype of any `ParseResult<I, O, U>`.
+ * - [O] — the output value type on success. Covariant; may be nullable. [Failure]
+ *   fixes this to [Nothing] so a `Failure<I, U>` is a subtype of any `ParseResult<I, O, U>`.
  * - [U] — the user context type. Invariant.
  *
  * @see Parser
  * @see ParserInput
  */
-sealed class ParseResult<out I : Any, out O : Any, U : Any>
+sealed class ParseResult<out I : Any, out O, U : Any>
 
 /**
  * Indicates that the parser matched successfully.
@@ -35,7 +35,7 @@ sealed class ParseResult<out I : Any, out O : Any, U : Any>
  * @property input the [ParserInput] that was active when this result was produced.
  *   Useful for retrieving the [ParserInput.userContext] or for error reporting.
  */
-data class Success<out I : Any, out O : Any, U : Any>(
+data class Success<out I : Any, out O, U : Any>(
     val value: O,
     val nextIndex: Int,
     val input: ParserInput<I, U>,

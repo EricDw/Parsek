@@ -12,8 +12,8 @@ package parsek
  * - [I] — the token (input element) type, e.g. `Char` for character-level parsing.
  *   Contravariant: a `Parser<Any, O, U>` can be used wherever a `Parser<Char, O, U>`
  *   is expected.
- * - [O] — the output value type produced on success. Covariant: a
- *   `Parser<I, String, U>` satisfies `Parser<I, CharSequence, U>`.
+ * - [O] — the output value type produced on success. Covariant; may be nullable.
+ *   A `Parser<I, String, U>` satisfies `Parser<I, CharSequence?, U>`.
  * - [U] — the user context type threaded through parsing without being consumed.
  *   Invariant: use [Unit] when no context is needed.
  *
@@ -27,7 +27,7 @@ package parsek
  * @see ParseResult
  * @see pSatisfy
  */
-fun interface Parser<in I : Any, out O : Any, U : Any> {
+fun interface Parser<in I : Any, out O, U : Any> {
     /**
      * Runs this parser against [input].
      *

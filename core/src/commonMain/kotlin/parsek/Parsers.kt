@@ -80,7 +80,7 @@ fun <I : Any, U : Any> pSatisfy(predicate: (I) -> Boolean): Parser<I, I, U> =
  * @see pSatisfy
  * @see pOr
  */
-fun <I : Any, O1 : Any, O2 : Any, U : Any> pAnd(
+fun <I : Any, O1, O2, U : Any> pAnd(
     first: Parser<I, O1, U>,
     second: Parser<I, O2, U>,
 ): Parser<I, Pair<O1, O2>, U> =
@@ -138,7 +138,7 @@ fun <I : Any, O1 : Any, O2 : Any, U : Any> pAnd(
  * @see pAnd
  * @see pMap
  */
-fun <I : Any, O : Any, U : Any> pOr(
+fun <I : Any, O, U : Any> pOr(
     first: Parser<I, O, U>,
     second: Parser<I, O, U>,
 ): Parser<I, O, U> =
@@ -189,7 +189,7 @@ fun <I : Any, O : Any, U : Any> pOr(
  * @see pOr
  * @see pBind
  */
-fun <I : Any, O : Any, R : Any, U : Any> pMap(
+fun <I : Any, O, R, U : Any> pMap(
     parser: Parser<I, O, U>,
     transform: (O) -> R,
 ): Parser<I, R, U> =
@@ -246,7 +246,7 @@ fun <I : Any, O : Any, R : Any, U : Any> pMap(
  * @see pAnd
  * @see pRepeat
  */
-fun <I : Any, O : Any, R : Any, U : Any> pBind(
+fun <I : Any, O, R, U : Any> pBind(
     parser: Parser<I, O, U>,
     transform: (O) -> Parser<I, R, U>,
 ): Parser<I, R, U> =
@@ -296,7 +296,7 @@ fun <I : Any, O : Any, R : Any, U : Any> pBind(
  * @see pAnd
  * @see pMany
  */
-fun <I : Any, O : Any, U : Any> pRepeat(
+fun <I : Any, O, U : Any> pRepeat(
     count: Int,
     parser: Parser<I, O, U>,
 ): Parser<I, List<O>, U> =
@@ -313,6 +313,52 @@ fun <I : Any, O : Any, U : Any> pRepeat(
             }
         }
         Success(values, current.index, input)
+    }
+
+/**
+ * Returns a [Parser] that tries [parser] and, if it fails, succeeds with `null`
+ * at the same position.
+ *
+ * `pOptional` is the zero-or-one combinator — it always succeeds. Use it to
+ * represent optional grammar elements.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] succeeds | [Success] with the parsed value; index advanced |
+ * | [parser] fails | [Success] with `null`; index unchanged |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser]; `null` is returned when it is absent.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val sign = pSatisfy<Char, Unit> { it == '+' || it == '-' }
+ * val optionalSign = pOptional(sign)
+ *
+ * val input = ParserInput.of("-1".toList(), Unit)
+ * val result = optionalSign(input)  // Success('-', nextIndex=1, ...)
+ *
+ * val noSign = ParserInput.of("1".toList(), Unit)
+ * val result2 = optionalSign(noSign)  // Success(null, nextIndex=0, ...)
+ * ```
+ *
+ * @param parser the parser to attempt.
+ * @return a [Parser] that always succeeds with the parsed value or `null`.
+ *
+ * @see pMany
+ * @see pOr
+ */
+fun <I : Any, O : Any, U : Any> pOptional(
+    parser: Parser<I, O, U>,
+): Parser<I, O?, U> =
+    Parser { input ->
+        when (val result = parser(input)) {
+            is Failure -> Success(null, input.index, input)
+            is Success -> result
+        }
     }
 
 /**
@@ -350,7 +396,7 @@ fun <I : Any, O : Any, U : Any> pRepeat(
  * @see pMany
  * @see pRepeat
  */
-fun <I : Any, O : Any, U : Any> pMany1(
+fun <I : Any, O, U : Any> pMany1(
     parser: Parser<I, O, U>,
 ): Parser<I, List<O>, U> =
     pMap(pAnd(parser, pMany(parser))) { (first, rest) -> listOf(first) + rest }
@@ -393,9 +439,10 @@ fun <I : Any, O : Any, U : Any> pMany1(
  *
  * @see pRepeat
  * @see pMany1
+ * @see pOptional
  * @see pAnd
  */
-fun <I : Any, O : Any, U : Any> pMany(
+fun <I : Any, O, U : Any> pMany(
     parser: Parser<I, O, U>,
 ): Parser<I, List<O>, U> =
     Parser { input ->
