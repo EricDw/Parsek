@@ -244,6 +244,7 @@ fun <I : Any, O : Any, R : Any, U : Any> pMap(
  *
  * @see pMap
  * @see pAnd
+ * @see pRepeat
  */
 fun <I : Any, O : Any, R : Any, U : Any> pBind(
     parser: Parser<I, O, U>,
@@ -254,4 +255,61 @@ fun <I : Any, O : Any, R : Any, U : Any> pBind(
             is Failure -> result
             is Success -> transform(result.value)(ParserInput(input.input, result.nextIndex, input.userContext))
         }
+    }
+
+/**
+ * Returns a [Parser] that runs [parser] exactly [count] times in sequence,
+ * collecting each output into a [List].
+ *
+ * The runs are applied left-to-right; each run starts where the previous one
+ * left off. If any run fails the whole parser fails at that position, without
+ * consuming the tokens matched by the successful preceding runs.
+ *
+ * A [count] of zero always succeeds immediately with an empty list.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | `count == 0` | [Success] with an empty list; index unchanged |
+ * | All [count] runs succeed | [Success] with a list of [count] values; index advanced past all |
+ * | Any run fails | [Failure] from that run |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser]; each successful value is collected.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val threeDigits = pRepeat(3, digit)
+ *
+ * val input = ParserInput.of("123x".toList(), Unit)
+ * val result = threeDigits(input)  // Success(['1','2','3'], nextIndex=3, ...)
+ * ```
+ *
+ * @param count the exact number of times to run [parser]; must be >= 0.
+ * @param parser the parser to repeat.
+ * @return a [Parser] that collects exactly [count] values on success.
+ *
+ * @see pBind
+ * @see pAnd
+ */
+fun <I : Any, O : Any, U : Any> pRepeat(
+    count: Int,
+    parser: Parser<I, O, U>,
+): Parser<I, List<O>, U> =
+    Parser { input ->
+        val values = ArrayList<O>(count)
+        var current = input
+        repeat(count) {
+            when (val result = parser(current)) {
+                is Failure -> return@Parser result
+                is Success -> {
+                    values.add(result.value)
+                    current = ParserInput(input.input, result.nextIndex, input.userContext)
+                }
+            }
+        }
+        Success(values, current.index, input)
     }
