@@ -78,6 +78,7 @@ fun <I : Any, U : Any> pSatisfy(predicate: (I) -> Boolean): Parser<I, I, U> =
  * @return a [Parser] that produces a [Pair] of both outputs on success.
  *
  * @see pSatisfy
+ * @see pOr
  */
 fun <I : Any, O1 : Any, O2 : Any, U : Any> pAnd(
     first: Parser<I, O1, U>,
@@ -92,6 +93,60 @@ fun <I : Any, O1 : Any, O2 : Any, U : Any> pAnd(
                     is Failure -> r2
                     is Success -> Success(r1.value to r2.value, r2.nextIndex, input)
                 }
+            }
+        }
+    }
+
+/**
+ * Returns a [Parser] that tries [first] and, if it fails, tries [second] at the
+ * same position.
+ *
+ * `pOr` implements ordered choice: [first] is always preferred. [second] is only
+ * attempted when [first] fails, and always against the original input position,
+ * never against input that [first] may have partially consumed.
+ *
+ * When both parsers fail, the failure with the greater [Failure.index] is returned,
+ * as it represents the furthest point reached in the input. If both fail at the same
+ * index, the failure from [second] is returned.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [first] succeeds | [Success] from [first] |
+ * | [first] fails, [second] succeeds | [Success] from [second] |
+ * | Both fail | [Failure] from whichever reached the furthest index |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by both parsers.
+ * - [O] — the shared output type; both parsers must produce the same type.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val letter = pSatisfy<Char, Unit> { it.isLetter() }
+ * val digitOrLetter = pOr(digit, letter)
+ *
+ * val input = ParserInput.of("a1".toList(), Unit)
+ * val result = digitOrLetter(input)  // Success('a', nextIndex=1, ...) via letter
+ * ```
+ *
+ * @param first the parser to try first.
+ * @param second the parser to try if [first] fails.
+ * @return a [Parser] that succeeds if either alternative matches.
+ *
+ * @see pAnd
+ */
+fun <I : Any, O : Any, U : Any> pOr(
+    first: Parser<I, O, U>,
+    second: Parser<I, O, U>,
+): Parser<I, O, U> =
+    Parser { input ->
+        when (val r1 = first(input)) {
+            is Success -> r1
+            is Failure -> when (val r2 = second(input)) {
+                is Success -> r2
+                is Failure -> if (r1.index >= r2.index) r1 else r2
             }
         }
     }
