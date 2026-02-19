@@ -136,6 +136,7 @@ fun <I : Any, O1 : Any, O2 : Any, U : Any> pAnd(
  * @return a [Parser] that succeeds if either alternative matches.
  *
  * @see pAnd
+ * @see pMap
  */
 fun <I : Any, O : Any, U : Any> pOr(
     first: Parser<I, O, U>,
@@ -148,5 +149,52 @@ fun <I : Any, O : Any, U : Any> pOr(
                 is Success -> r2
                 is Failure -> if (r1.index >= r2.index) r1 else r2
             }
+        }
+    }
+
+/**
+ * Returns a [Parser] that runs [parser] and applies [transform] to the output
+ * value if it succeeds.
+ *
+ * `pMap` is the primary way to convert raw parsed tokens into meaningful domain
+ * types without altering parse position or error behaviour.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] fails | [Failure] propagated unchanged |
+ * | [parser] succeeds | [Success] with `transform(value)`; index and input unchanged |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser] and the input type of [transform].
+ * - [R] — the output type of [transform] and of the returned parser.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val digitInt = pMap(digit) { it.digitToInt() }
+ *
+ * val input = ParserInput.of("3".toList(), Unit)
+ * val result = digitInt(input)  // Success(3, nextIndex=1, ...)
+ * ```
+ *
+ * @param parser the parser whose success value is transformed.
+ * @param transform a function applied to the parsed value on success; should be
+ *   side-effect-free.
+ * @return a [Parser] that produces `transform(value)` on success.
+ *
+ * @see pAnd
+ * @see pOr
+ */
+fun <I : Any, O : Any, R : Any, U : Any> pMap(
+    parser: Parser<I, O, U>,
+    transform: (O) -> R,
+): Parser<I, R, U> =
+    Parser { input ->
+        when (val result = parser(input)) {
+            is Failure -> result
+            is Success -> Success(transform(result.value), result.nextIndex, result.input)
         }
     }
