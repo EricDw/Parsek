@@ -224,18 +224,17 @@ fun <I : Any, O : Any, R : Any, U : Any> pMap(
  *
  * ### Example
  * ```kotlin
- * // Parse a digit that encodes how many letters follow, then parse exactly that many letters.
- * val digit = pMap(pSatisfy<Char, Unit> { it.isDigit() }) { it.digitToInt() }
- * val letter = pSatisfy<Char, Unit> { it.isLetter() }
+ * // Parse a digit, then use its value to decide which character to match next.
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
  *
- * val parser = pBind(digit) { count ->
- *     (2..count).fold(pMap(letter) { listOf(it) }) { acc, _ ->
- *         pMap(pAnd(acc, letter)) { (list, ch) -> list + ch }
- *     }
+ * val parser = pBind(digit) { d ->
+ *     // If the digit is '1', expect 'a'; otherwise expect 'b'.
+ *     val expected = if (d == '1') 'a' else 'b'
+ *     pSatisfy<Char, Unit> { it == expected }
  * }
  *
- * val input = ParserInput.of("2ab".toList(), Unit)
- * val result = parser(input)  // Success(['a', 'b'], nextIndex=3, ...)
+ * val input = ParserInput.of("1a".toList(), Unit)
+ * val result = parser(input)  // Success('a', nextIndex=2, ...)
  * ```
  *
  * @param parser the first parser to run.
