@@ -429,6 +429,12 @@ commonmark/
   delimiter-stack algorithm operating on a pre-tokenised run of inlines.
 - **Tight vs. loose lists** — determined retroactively after all list items
   are parsed by inspecting whether blank lines appear within or between items.
+- **Syntax highlighting** — the highlight infrastructure (`Span`, `TokenType`,
+  `SpanSink`, `pTag`) exists in `parsek.commonmark.highlight` and is intentionally
+  **not** a requirement of this plan. Block and inline parsers are kept generic
+  over the user-context type `U` so they can run with or without a `SpanSink`.
+  A dedicated `pTag` wrapping layer is planned as a follow-on phase once the
+  CommonMark spec suite is green. See `HIGHLIGHT_PLAN.md`.
 
 ---
 
