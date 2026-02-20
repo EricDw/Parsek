@@ -48,6 +48,26 @@ infix fun <I : Any, O, U : Any> Parser<I, O, U>.or(
 ): Parser<I, O, U> = pOr(this, other)
 
 /**
+ * Parses zero or more occurrences of this parser separated by [separator],
+ * collecting item values (not separators) into a [List].
+ *
+ * Sugar for [pSepBy]: `item sepBy sep` is equivalent to `pSepBy(item, sep)`.
+ */
+infix fun <I : Any, O, S, U : Any> Parser<I, O, U>.sepBy(
+    separator: Parser<I, S, U>,
+): Parser<I, List<O>, U> = pSepBy(this, separator)
+
+/**
+ * Parses one or more occurrences of this parser separated by [separator],
+ * collecting item values (not separators) into a non-empty [List].
+ *
+ * Sugar for [pSepBy1]: `item sepBy1 sep` is equivalent to `pSepBy1(item, sep)`.
+ */
+infix fun <I : Any, O, S, U : Any> Parser<I, O, U>.sepBy1(
+    separator: Parser<I, S, U>,
+): Parser<I, List<O>, U> = pSepBy1(this, separator)
+
+/**
  * Replaces this parser's failure message with [message] on failure.
  *
  * Sugar for [pLabel]: `a label "expected digit"` is equivalent to

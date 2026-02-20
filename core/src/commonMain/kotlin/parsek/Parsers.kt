@@ -785,3 +785,143 @@ fun <I : Any, O, U : Any> pMany(
         }
         Success(values, current.index, input)
     }
+
+/**
+ * Returns a [Parser] that parses one or more occurrences of [item] separated by
+ * [separator], collecting the item values (not the separators) into a non-empty [List].
+ *
+ * The grammar matched is `item (separator item)*`. The trailing separator, if present,
+ * is **not** consumed.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [item] fails on the first attempt | [Failure] from [item] |
+ * | [item] succeeds N times (N ≥ 1) | [Success] with N values; index advanced past all items and separators |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by both parsers.
+ * - [O] — the output type of [item]; each value is collected.
+ * - [S] — the output type of [separator]; discarded.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val comma = pSatisfy<Char, Unit> { it == ',' }
+ * val parser = pSepBy1(digit, comma)
+ *
+ * val input = ParserInput.of("1,2,3".toList(), Unit)
+ * val result = parser(input)  // Success(['1','2','3'], nextIndex=5, ...)
+ * ```
+ *
+ * @param item the parser for each item.
+ * @param separator the parser for the delimiter between items; its value is discarded.
+ * @return a [Parser] that succeeds with a non-empty list of item values.
+ *
+ * @see pSepBy
+ * @see pMany1
+ */
+fun <I : Any, O, S, U : Any> pSepBy1(
+    item: Parser<I, O, U>,
+    separator: Parser<I, S, U>,
+): Parser<I, List<O>, U> {
+    val tail = pMap(pAnd(separator, item)) { it.second }
+    return pMap(pAnd(item, pMany(tail))) { (first, rest) -> listOf(first) + rest }
+}
+
+/**
+ * Returns a [Parser] that parses zero or more occurrences of [item] separated by
+ * [separator], collecting the item values (not the separators) into a [List].
+ *
+ * The grammar matched is `(item (separator item)*)?`. The trailing separator, if
+ * present, is **not** consumed. Always succeeds; returns an empty list when [item]
+ * fails on the first attempt.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [item] fails on the first attempt | [Success] with an empty list; index unchanged |
+ * | [item] succeeds N times (N ≥ 1) | [Success] with N values; index advanced past all items and separators |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by both parsers.
+ * - [O] — the output type of [item]; each value is collected.
+ * - [S] — the output type of [separator]; discarded.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val comma = pSatisfy<Char, Unit> { it == ',' }
+ * val parser = pSepBy(digit, comma)
+ *
+ * val input = ParserInput.of("1,2,3".toList(), Unit)
+ * val result = parser(input)  // Success(['1','2','3'], nextIndex=5, ...)
+ *
+ * val empty = ParserInput.of("abc".toList(), Unit)
+ * val result2 = parser(empty)  // Success([], nextIndex=0, ...)
+ * ```
+ *
+ * @param item the parser for each item.
+ * @param separator the parser for the delimiter between items; its value is discarded.
+ * @return a [Parser] that always succeeds with a (possibly empty) list of item values.
+ *
+ * @see pSepBy1
+ * @see pMany
+ */
+fun <I : Any, O, S, U : Any> pSepBy(
+    item: Parser<I, O, U>,
+    separator: Parser<I, S, U>,
+): Parser<I, List<O>, U> {
+    val empty = Parser<I, List<O>, U> { input -> Success(emptyList(), input.index, input) }
+    return pOr(pSepBy1(item, separator), empty)
+}
+
+/**
+ * Returns a [Parser] that runs [open], then [inner], then [close] in sequence,
+ * succeeding with [inner]'s value and discarding the delimiter values.
+ *
+ * `pBetween` is sugar for wrapping a parser between two delimiters — for example,
+ * parentheses, brackets, or quotation marks.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [open] fails | [Failure] from [open] |
+ * | [open] succeeds, [inner] fails | [Failure] from [inner] |
+ * | [open] and [inner] succeed, [close] fails | [Failure] from [close] |
+ * | All three succeed | [Success] with [inner]'s value; index advanced past all three |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by all parsers.
+ * - [O1] — the output type of [open]; discarded.
+ * - [O2] — the output type of [inner]; returned on success.
+ * - [O3] — the output type of [close]; discarded.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val open  = pSatisfy<Char, Unit> { it == '(' }
+ * val close = pSatisfy<Char, Unit> { it == ')' }
+ * val parser = pBetween(open, close, digit)
+ *
+ * val input = ParserInput.of("(5)".toList(), Unit)
+ * val result = parser(input)  // Success('5', nextIndex=3, ...)
+ * ```
+ *
+ * @param open the parser for the opening delimiter; its value is discarded.
+ * @param close the parser for the closing delimiter; its value is discarded.
+ * @param inner the parser for the content between the delimiters.
+ * @return a [Parser] that succeeds with [inner]'s value.
+ *
+ * @see pAnd
+ * @see pMap
+ */
+fun <I : Any, O1, O2, O3, U : Any> pBetween(
+    open: Parser<I, O1, U>,
+    close: Parser<I, O3, U>,
+    inner: Parser<I, O2, U>,
+): Parser<I, O2, U> =
+    pMap(pAnd(pAnd(open, inner), close)) { (openInner, _) -> openInner.second }
