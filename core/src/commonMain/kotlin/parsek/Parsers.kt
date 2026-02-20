@@ -351,6 +351,7 @@ fun <I : Any, O1, O2, U : Any> pAnd(
  * @return a [Parser] that succeeds if either alternative matches.
  *
  * @see pAnd
+ * @see pChoice
  * @see pMap
  */
 fun <I : Any, O, U : Any> pOr(
@@ -366,6 +367,51 @@ fun <I : Any, O, U : Any> pOr(
             }
         }
     }
+
+/**
+ * Returns a [Parser] that tries each parser in [parsers] in order, returning
+ * the first success.
+ *
+ * `pChoice` is the n-ary generalisation of [pOr]: it reduces the list with
+ * [pOr], so its failure and precedence semantics are identical. When all
+ * parsers fail the result is the failure that reached the furthest index.
+ *
+ * An empty [parsers] list always fails with "No alternatives".
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parsers] is empty | [Failure] — "No alternatives" |
+ * | First matching parser succeeds | [Success] from that parser |
+ * | All parsers fail | [Failure] from whichever reached the furthest index |
+ *
+ * ### Type parameters
+ * - [I] — the shared token type consumed by all parsers.
+ * - [O] — the shared output type; all parsers must produce the same type.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val parser = pChoice(listOf(
+ *     pSatisfy<Char, Unit> { it == 'a' },
+ *     pSatisfy<Char, Unit> { it == 'b' },
+ *     pSatisfy<Char, Unit> { it == 'c' },
+ * ))
+ *
+ * val input = ParserInput.of("b".toList(), Unit)
+ * val result = parser(input)  // Success('b', nextIndex=1, ...)
+ * ```
+ *
+ * @param parsers the ordered list of alternatives to try.
+ * @return a [Parser] that succeeds with the first matching alternative.
+ *
+ * @see pOr
+ */
+fun <I : Any, O, U : Any> pChoice(
+    parsers: List<Parser<I, O, U>>,
+): Parser<I, O, U> =
+    parsers.reduceOrNull { acc, parser -> pOr(acc, parser) }
+        ?: Parser { input -> Failure("No alternatives", input.index, input) }
 
 /**
  * Returns a [Parser] that runs [parser] and applies [transform] to the output
