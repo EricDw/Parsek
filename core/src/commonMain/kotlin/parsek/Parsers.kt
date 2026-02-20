@@ -44,6 +44,85 @@ fun <I : Any, U : Any> pSatisfy(predicate: (I) -> Boolean): Parser<I, I, U> =
     }
 
 /**
+ * Returns a [Parser] that succeeds with [Unit] only when all input has been
+ * consumed, and fails if any tokens remain.
+ *
+ * `pEof` is typically used at the end of a top-level parser to assert that
+ * the entire input was consumed and no trailing content was left unparsed.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | Input is exhausted | [Success] with [Unit]; index unchanged |
+ * | Tokens remain | [Failure] — "Expected end of input but got \<token\> at index \<n\>" |
+ *
+ * ### Type parameters
+ * - [I] — the token type.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val singleDigit = pAnd(digit, pEof())
+ *
+ * val input = ParserInput.of("3".toList(), Unit)
+ * val result = singleDigit(input)  // Success(Pair('3', Unit), nextIndex=1, ...)
+ *
+ * val tooLong = ParserInput.of("3x".toList(), Unit)
+ * val result2 = singleDigit(tooLong)  // Failure — 'x' remains
+ * ```
+ *
+ * @return a [Parser] that succeeds with [Unit] at end of input.
+ *
+ * @see pAny
+ * @see pSatisfy
+ */
+fun <I : Any, U : Any> pEof(): Parser<I, Unit, U> =
+    Parser { input ->
+        if (input.isAtEnd) Success(Unit, input.index, input)
+        else Failure(
+            "Expected end of input but got ${input.current()} at index ${input.index}",
+            input.index,
+            input,
+        )
+    }
+
+/**
+ * Returns a [Parser] that consumes and returns any single token, failing only
+ * when the input is exhausted.
+ *
+ * `pAny` is the unconditional token consumer — it never rejects a token on
+ * its own, only failing at end of input. Use it as a wildcard in situations
+ * where you need to skip or collect tokens regardless of their value.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | Input is exhausted | [Failure] — "Unexpected end of input" |
+ * | Token available | [Success] with that token; index advances by 1 |
+ *
+ * ### Type parameters
+ * - [I] — the token type.
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val input = ParserInput.of("ab".toList(), Unit)
+ * val result = pAny<Char, Unit>()(input)  // Success('a', nextIndex=1, ...)
+ * ```
+ *
+ * @return a [Parser] that succeeds with the next token or fails at end of input.
+ *
+ * @see pEof
+ * @see pSatisfy
+ */
+fun <I : Any, U : Any> pAny(): Parser<I, I, U> =
+    Parser { input ->
+        if (input.isAtEnd) Failure("Unexpected end of input", input.index, input)
+        else Success(input.current(), input.index + 1, input)
+    }
+
+/**
  * Returns a [Parser] that runs [first] and then [second] in sequence, combining
  * their outputs into a [Pair].
  *
