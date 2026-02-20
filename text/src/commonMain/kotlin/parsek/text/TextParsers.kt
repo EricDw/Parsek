@@ -3,6 +3,7 @@ package parsek.text
 import parsek.Failure
 import parsek.Parser
 import parsek.Success
+import parsek.ParserInput
 import parsek.pAnd
 import parsek.pLabel
 import parsek.pMany
@@ -11,6 +12,7 @@ import parsek.pMap
 import parsek.pNot
 import parsek.pOptional
 import parsek.pOr
+import parsek.pRepeat
 import parsek.pSequence
 import parsek.pSatisfy
 
@@ -306,6 +308,82 @@ fun <U : Any> pUnicodeWhitespace(): Parser<Char, Char, U> =
         },
         "Unicode whitespace",
     )
+
+/**
+ * Returns a [Parser] that consumes zero or more characters satisfying [predicate],
+ * collecting them into a [String]. Always succeeds; returns an empty string when
+ * [predicate] is false for the first character or the input is exhausted.
+ *
+ * Equivalent to `pMap(pMany(pSatisfy(predicate))) { it.joinToString("") }`.
+ *
+ * @param predicate the test applied to each character; consumption stops on the
+ *   first character for which it returns `false`.
+ * @return a [Parser] that always succeeds with the matched substring.
+ *
+ * @see pTakeWhile1
+ */
+fun <U : Any> pTakeWhile(predicate: (Char) -> Boolean): Parser<Char, String, U> =
+    pMap(pMany(pSatisfy(predicate))) { it.joinToString("") }
+
+/**
+ * Returns a [Parser] that consumes one or more characters satisfying [predicate],
+ * collecting them into a [String]. Fails when [predicate] is false for the first
+ * character or the input is exhausted.
+ *
+ * Equivalent to `pMap(pMany1(pSatisfy(predicate))) { it.joinToString("") }`.
+ *
+ * @param predicate the test applied to each character; consumption stops on the
+ *   first character for which it returns `false`.
+ * @return a [Parser] that succeeds with a non-empty matched substring, or fails.
+ *
+ * @see pTakeWhile
+ */
+fun <U : Any> pTakeWhile1(predicate: (Char) -> Boolean): Parser<Char, String, U> =
+    pMap(pMany1(pSatisfy(predicate))) { it.joinToString("") }
+
+/**
+ * Returns a [Parser] that consumes exactly [n] space characters (`' '`).
+ *
+ * Fails if fewer than [n] spaces are present at the current position.
+ *
+ * @param n the exact number of spaces to consume; must be >= 0.
+ * @return a [Parser] that succeeds after consuming exactly [n] spaces.
+ *
+ * @see pUpTo3Spaces
+ */
+fun <U : Any> pIndent(n: Int): Parser<Char, List<Char>, U> =
+    pRepeat(n, pSpace())
+
+/**
+ * Returns a [Parser] that consumes 0–3 leading space characters (`' '`),
+ * succeeding with the list of matched spaces. Always succeeds.
+ *
+ * This is used in nearly every block-level parser in the CommonMark spec to
+ * allow optional indentation before block markers.
+ *
+ * @return a [Parser] that always succeeds with 0, 1, 2, or 3 spaces.
+ *
+ * @see pIndent
+ * @see pSpace
+ */
+fun <U : Any> pUpTo3Spaces(): Parser<Char, List<Char>, U> =
+    Parser { input ->
+        val sp = pSpace<U>()
+        var current = input
+        val spaces = mutableListOf<Char>()
+        var count = 0
+        while (count < 3) {
+            when (val r = sp(current)) {
+                is Failure -> break
+                is Success -> {
+                    spaces.add(r.value)
+                    current = ParserInput(current.input, r.nextIndex, current.userContext)
+                    count++
+                }
+            }
+        }
+        Success(spaces, current.index, input)
+    }
 
 fun <U : Any> pInt(): Parser<Char, Int, U> {
     val sign = pOptional(pOr(pChar<U>('+'), pChar('-')))
