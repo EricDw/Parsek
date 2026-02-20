@@ -74,6 +74,16 @@ class PChoiceTest {
     }
 
     @Test
+    fun varargOverloadMatchesListOverload() {
+        val viaList = pChoice(listOf(a, b, c))
+        val viaVararg = pChoice(a, b, c)
+        val inputs = listOf("a", "b", "c", "z").map { ParserInput.of(it.toList(), Unit) }
+        for (inp in inputs) {
+            assertEquals(viaList(inp)::class, viaVararg(inp)::class)
+        }
+    }
+
+    @Test
     fun equivalentToChainingPOr() {
         val viaChoice = pChoice(listOf(a, b, c))
         val viaOr = pOr(pOr(a, b), c)

@@ -413,6 +413,11 @@ fun <I : Any, O, U : Any> pChoice(
     parsers.reduceOrNull { acc, parser -> pOr(acc, parser) }
         ?: Parser { input -> Failure("No alternatives", input.index, input) }
 
+/** Vararg overload of [pChoice]. */
+fun <I : Any, O, U : Any> pChoice(
+    vararg parsers: Parser<I, O, U>,
+): Parser<I, O, U> = pChoice(parsers.toList())
+
 /**
  * Returns a [Parser] that runs [parser] and applies [transform] to the output
  * value if it succeeds.
