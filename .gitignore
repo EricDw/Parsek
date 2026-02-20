@@ -4,6 +4,9 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 
 ### IntelliJ IDEA ###
+.idea/artifacts/
+.idea/gradle.xml
+.idea/misc.xml
 out/
 !**/src/main/**/out/
 !**/src/test/**/out/

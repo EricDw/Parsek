@@ -1,6 +1,0 @@
-<component name="ArtifactManager">
-  <artifact type="jar" name="commonmark-wasm-wasi">
-    <output-path>$PROJECT_DIR$/commonmark/build/libs</output-path>
-    <root id="archive" name="commonmark-wasm-wasi.jar" />
-  </artifact>
-</component>

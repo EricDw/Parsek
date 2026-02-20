@@ -1,6 +1,0 @@
-<component name="ArtifactManager">
-  <artifact type="jar" name="text-jvm">
-    <output-path>$PROJECT_DIR$/text/build/libs</output-path>
-    <root id="archive" name="text-jvm.jar" />
-  </artifact>
-</component>
