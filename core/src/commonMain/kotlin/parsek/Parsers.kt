@@ -210,6 +210,55 @@ fun <I : Any, O, U : Any> pNot(parser: Parser<I, O, U>): Parser<I, Unit, U> =
     }
 
 /**
+ * Returns a [Parser] that runs [parser] and, if it fails, replaces the failure
+ * message with [message].
+ *
+ * `pLabel` is the primary way to produce human-readable error messages. Instead
+ * of exposing low-level diagnostic text from [pSatisfy] or nested combinators,
+ * wrap a parser in `pLabel` to emit a single, intent-describing message when
+ * it fails.
+ *
+ * On success the result is passed through unchanged.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] succeeds | [Success] propagated unchanged |
+ * | [parser] fails | [Failure] with [message]; index and input from the original failure |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser].
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pLabel(pSatisfy<Char, Unit> { it.isDigit() }, "a digit")
+ *
+ * val input = ParserInput.of("abc".toList(), Unit)
+ * val result = digit(input)
+ * // Failure("a digit", index=0, ...)
+ * ```
+ *
+ * @param parser the parser to run.
+ * @param message the failure message to use when [parser] fails.
+ * @return a [Parser] that propagates success and replaces failure messages.
+ *
+ * @see pSatisfy
+ * @see pMap
+ */
+fun <I : Any, O, U : Any> pLabel(
+    parser: Parser<I, O, U>,
+    message: String,
+): Parser<I, O, U> =
+    Parser { input ->
+        when (val result = parser(input)) {
+            is Success -> result
+            is Failure -> Failure(message, result.index, result.input)
+        }
+    }
+
+/**
  * Returns a [Parser] that runs [first] and then [second] in sequence, combining
  * their outputs into a [Pair].
  *
