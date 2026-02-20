@@ -238,6 +238,75 @@ fun <U : Any> pRestOfLine(): Parser<Char, String, U> =
         chars.joinToString("")
     }
 
+/**
+ * Returns a [Parser] that consumes one ASCII punctuation character.
+ *
+ * ASCII punctuation is defined by the CommonMark spec as any character in:
+ * ``!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~``
+ *
+ * @return a [Parser] that succeeds with the matched punctuation character.
+ *
+ * @see pUnicodePunctuation
+ */
+fun <U : Any> pAsciiPunctuation(): Parser<Char, Char, U> =
+    pLabel(
+        pSatisfy { it in "!\"#\$%&'()*+,-./:;<=>?@[\\]^_`{|}~" },
+        "ASCII punctuation",
+    )
+
+/**
+ * Returns a [Parser] that consumes one Unicode punctuation character.
+ *
+ * A character is considered Unicode punctuation if it belongs to the Unicode
+ * general categories P (punctuation) or S (symbol), or is an ASCII punctuation
+ * character as defined by the CommonMark spec.
+ *
+ * @return a [Parser] that succeeds with the matched punctuation character.
+ *
+ * @see pAsciiPunctuation
+ */
+fun <U : Any> pUnicodePunctuation(): Parser<Char, Char, U> =
+    pLabel(
+        pSatisfy { ch ->
+            ch in "!\"#\$%&'()*+,-./:;<=>?@[\\]^_`{|}~" ||
+                ch.category.let { cat ->
+                    cat == CharCategory.CONNECTOR_PUNCTUATION ||
+                        cat == CharCategory.DASH_PUNCTUATION ||
+                        cat == CharCategory.START_PUNCTUATION ||
+                        cat == CharCategory.END_PUNCTUATION ||
+                        cat == CharCategory.INITIAL_QUOTE_PUNCTUATION ||
+                        cat == CharCategory.FINAL_QUOTE_PUNCTUATION ||
+                        cat == CharCategory.OTHER_PUNCTUATION ||
+                        cat == CharCategory.MATH_SYMBOL ||
+                        cat == CharCategory.CURRENCY_SYMBOL ||
+                        cat == CharCategory.MODIFIER_SYMBOL ||
+                        cat == CharCategory.OTHER_SYMBOL
+                }
+        },
+        "Unicode punctuation",
+    )
+
+/**
+ * Returns a [Parser] that consumes one Unicode whitespace character.
+ *
+ * Unicode whitespace is defined by the CommonMark spec as any character in
+ * Unicode category Zs (space separator), plus tab (`\t`), line feed (`\n`),
+ * form feed (`\u000C`), and carriage return (`\r`).
+ *
+ * @return a [Parser] that succeeds with the matched whitespace character.
+ *
+ * @see pSpaceOrTab
+ * @see pLineEnding
+ */
+fun <U : Any> pUnicodeWhitespace(): Parser<Char, Char, U> =
+    pLabel(
+        pSatisfy { ch ->
+            ch == '\t' || ch == '\n' || ch == '\u000C' || ch == '\r' ||
+                ch.category == CharCategory.SPACE_SEPARATOR
+        },
+        "Unicode whitespace",
+    )
+
 fun <U : Any> pInt(): Parser<Char, Int, U> {
     val sign = pOptional(pOr(pChar<U>('+'), pChar('-')))
     val digits = pMany1(pSatisfy<Char, U> { it.isDigit() })
