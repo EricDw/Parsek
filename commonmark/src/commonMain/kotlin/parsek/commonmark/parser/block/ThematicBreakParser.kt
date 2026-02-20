@@ -37,11 +37,11 @@ import parsek.text.pUpTo3Spaces
  * @return a [Parser] that succeeds with [Block.ThematicBreak] on a valid
  *   thematic break line, or fails otherwise.
  */
-fun pThematicBreak(): Parser<Char, Block.ThematicBreak, Unit> =
+fun <U : Any> pThematicBreak(): Parser<Char, Block.ThematicBreak, U> =
     pLabel(
         Parser { input ->
             // 1. Consume 0–3 leading spaces.
-            val indentResult = pUpTo3Spaces<Unit>()(input) as Success
+            val indentResult = pUpTo3Spaces<U>()(input) as Success
             var idx = indentResult.nextIndex
 
             // 2. Determine the marker character from the first non-space token.
@@ -50,11 +50,11 @@ fun pThematicBreak(): Parser<Char, Block.ThematicBreak, Unit> =
             if (marker != '-' && marker != '_' && marker != '*')
                 return@Parser Failure("thematic break", idx, input)
 
-            val markerP = pSatisfy<Char, Unit> { it == marker }
+            val markerP = pSatisfy<Char, U> { it == marker }
 
-            // A single step in the tail: optional whitespace then one marker.
-            val spacesThenMarker = Parser<Char, Char, Unit> { pos ->
-                val spaces = pMany(pSpaceOrTab<Unit>())(pos) as Success
+            // A single tail step: optional whitespace then one marker.
+            val spacesThenMarker = Parser<Char, Char, U> { pos ->
+                val spaces = pMany(pSpaceOrTab<U>())(pos) as Success
                 markerP(ParserInput(pos.input, spaces.nextIndex, pos.userContext))
             }
 
@@ -74,15 +74,15 @@ fun pThematicBreak(): Parser<Char, Block.ThematicBreak, Unit> =
                 return@Parser Failure("thematic break", idx, input)
 
             // 4. Allow trailing spaces/tabs.
-            val trailing = pMany(pSpaceOrTab<Unit>())(
+            val trailing = pMany(pSpaceOrTab<U>())(
                 ParserInput(input.input, idx, input.userContext)
             ) as Success
             idx = trailing.nextIndex
 
             // 5. Must be followed by a line ending or EOF.
             val lineEnd = pOr(
-                pMap(pLineEnding<Unit>()) { Unit },
-                pMap(pEof<Char, Unit>()) { Unit },
+                pMap(pLineEnding<U>()) { Unit },
+                pMap(pEof<Char, U>()) { Unit },
             )(ParserInput(input.input, idx, input.userContext))
             when (lineEnd) {
                 is Failure -> return@Parser Failure("thematic break", idx, input)

@@ -11,7 +11,7 @@ import kotlin.test.assertIs
 class PThematicBreakTest {
 
     private fun parse(input: String) =
-        pThematicBreak()(ParserInput.of(input.toList(), Unit))
+        pThematicBreak<Unit>()(ParserInput.of(input.toList(), Unit))
 
     // -------------------------------------------------------------------------
     // Valid thematic breaks — dashes
