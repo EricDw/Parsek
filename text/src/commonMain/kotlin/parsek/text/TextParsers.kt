@@ -5,8 +5,10 @@ import parsek.Parser
 import parsek.Success
 import parsek.pAnd
 import parsek.pLabel
+import parsek.pMany
 import parsek.pMany1
 import parsek.pMap
+import parsek.pNot
 import parsek.pOptional
 import parsek.pOr
 import parsek.pSequence
@@ -178,6 +180,63 @@ fun <U : Any> pTab(): Parser<Char, Char, U> =
  */
 fun <U : Any> pSpaceOrTab(): Parser<Char, Char, U> =
     pLabel(pOr(pSpace(), pTab()), "space or tab")
+
+/**
+ * Returns a [Parser] that consumes a line ending (`\n`, `\r\n`, or `\r` not
+ * followed by `\n`) and always succeeds with the normalised newline character `'\n'`.
+ *
+ * The three forms are tried in this order:
+ * 1. `\r\n` — Windows CRLF
+ * 2. `\r` not followed by `\n` — classic Mac CR
+ * 3. `\n` — Unix LF
+ *
+ * @return a [Parser] that succeeds with `'\n'` on any line ending form.
+ *
+ * @see pBlankLine
+ * @see pRestOfLine
+ */
+fun <U : Any> pLineEnding(): Parser<Char, Char, U> {
+    val cr = pChar<U>('\r')
+    val lf = pChar<U>('\n')
+    val crlf    = pMap(pAnd(cr, lf)) { '\n' }
+    val crAlone = pMap(pAnd(cr, pNot(lf))) { '\n' }
+    return pLabel(pOr(crlf, pOr(crAlone, lf)), "line ending")
+}
+
+/**
+ * Returns a [Parser] that consumes zero or more space/tab characters followed
+ * by a line ending, succeeding with [Unit].
+ *
+ * A blank line may contain any number of spaces and tabs before the line ending;
+ * the whitespace and the ending are both consumed.
+ *
+ * @return a [Parser] that always succeeds with [Unit] on a blank line, or fails
+ *   if no line ending follows the optional whitespace.
+ *
+ * @see pLineEnding
+ * @see pSpaceOrTab
+ */
+fun <U : Any> pBlankLine(): Parser<Char, Unit, U> =
+    pLabel(
+        pMap(pAnd(pMany(pSpaceOrTab<U>()), pLineEnding())) { Unit },
+        "blank line",
+    )
+
+/**
+ * Returns a [Parser] that consumes all characters up to (but not including)
+ * the next line ending or end of input, succeeding with the matched [String].
+ *
+ * The line ending itself is **not** consumed. An empty string is returned when
+ * the current position is already at a line ending or end of input.
+ *
+ * @return a [Parser] that always succeeds with the rest of the current line.
+ *
+ * @see pLineEnding
+ */
+fun <U : Any> pRestOfLine(): Parser<Char, String, U> =
+    pMap(pMany(pSatisfy { it != '\n' && it != '\r' })) { chars ->
+        chars.joinToString("")
+    }
 
 fun <U : Any> pInt(): Parser<Char, Int, U> {
     val sign = pOptional(pOr(pChar<U>('+'), pChar('-')))
