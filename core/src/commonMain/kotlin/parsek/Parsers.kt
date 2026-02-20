@@ -123,6 +123,93 @@ fun <I : Any, U : Any> pAny(): Parser<I, I, U> =
     }
 
 /**
+ * Returns a [Parser] that runs [parser] and, if it succeeds, returns its value
+ * without consuming any input.
+ *
+ * `pLookAhead` peeks ahead in the input: the index is always reset to its
+ * original position after a successful match. A failure from [parser] is
+ * propagated unchanged, also without consuming input.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] succeeds | [Success] with [parser]'s value; index **unchanged** |
+ * | [parser] fails | [Failure] propagated from [parser]; index unchanged |
+ *
+ * ### Type parameters
+ * - [I] — the token type consumed by [parser].
+ * - [O] — the output type of [parser].
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val digit = pSatisfy<Char, Unit> { it.isDigit() }
+ * val peek = pLookAhead(digit)
+ *
+ * val input = ParserInput.of("1a".toList(), Unit)
+ * val result = peek(input)  // Success('1', nextIndex=0, ...) — index stays at 0
+ * ```
+ *
+ * @param parser the parser to run as a lookahead.
+ * @return a [Parser] that succeeds without advancing the index.
+ *
+ * @see pNot
+ * @see pSatisfy
+ */
+fun <I : Any, O, U : Any> pLookAhead(parser: Parser<I, O, U>): Parser<I, O, U> =
+    Parser { input ->
+        when (val result = parser(input)) {
+            is Failure -> result
+            is Success -> Success(result.value, input.index, input)
+        }
+    }
+
+/**
+ * Returns a [Parser] that succeeds with [Unit] when [parser] would fail at the
+ * current position, and fails when [parser] would succeed. No input is consumed
+ * in either case.
+ *
+ * `pNot` is a negative lookahead: it inverts the success/failure of [parser]
+ * without ever advancing the index. Use it to assert that a particular pattern
+ * does *not* appear at the current position before committing to another parse.
+ *
+ * ### Behaviour
+ * | Condition | Result |
+ * |---|---|
+ * | [parser] fails | [Success] with [Unit]; index unchanged |
+ * | [parser] succeeds | [Failure] — "Unexpected match at index \<n\>"; index unchanged |
+ *
+ * ### Type parameters
+ * - [I] — the token type.
+ * - [O] — the output type of [parser] (not used in the result).
+ * - [U] — the user context type threaded through unchanged.
+ *
+ * ### Example
+ * ```kotlin
+ * val notDigit = pNot(pSatisfy<Char, Unit> { it.isDigit() })
+ *
+ * val input = ParserInput.of("a1".toList(), Unit)
+ * val result = notDigit(input)  // Success(Unit, nextIndex=0, ...) — 'a' is not a digit
+ *
+ * val digits = ParserInput.of("1a".toList(), Unit)
+ * val result2 = notDigit(digits)  // Failure — '1' would have matched
+ * ```
+ *
+ * @param parser the parser whose failure is required.
+ * @return a [Parser] that succeeds with [Unit] only when [parser] would fail.
+ *
+ * @see pLookAhead
+ * @see pSatisfy
+ */
+fun <I : Any, O, U : Any> pNot(parser: Parser<I, O, U>): Parser<I, Unit, U> =
+    Parser { input ->
+        when (parser(input)) {
+            is Success -> Failure("Unexpected match at index ${input.index}", input.index, input)
+            is Failure -> Success(Unit, input.index, input)
+        }
+    }
+
+/**
  * Returns a [Parser] that runs [first] and then [second] in sequence, combining
  * their outputs into a [Pair].
  *
