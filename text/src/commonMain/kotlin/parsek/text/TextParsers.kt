@@ -112,6 +112,73 @@ fun <U : Any> pString(
  * @see pChar
  * @see pString
  */
+/**
+ * Returns a [Parser] that consumes one decimal digit character (`0`–`9`).
+ *
+ * @return a [Parser] that succeeds with the matched digit character.
+ *
+ * @see pHexDigit
+ * @see pLetter
+ */
+fun <U : Any> pDigit(): Parser<Char, Char, U> =
+    pLabel(pSatisfy { it.isDigit() }, "digit")
+
+/**
+ * Returns a [Parser] that consumes one hexadecimal digit character
+ * (`0`–`9`, `a`–`f`, `A`–`F`).
+ *
+ * @return a [Parser] that succeeds with the matched hex digit character.
+ *
+ * @see pDigit
+ */
+fun <U : Any> pHexDigit(): Parser<Char, Char, U> =
+    pLabel(pSatisfy { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }, "hex digit")
+
+/**
+ * Returns a [Parser] that consumes one Unicode letter character (as determined
+ * by [Char.isLetter]).
+ *
+ * @return a [Parser] that succeeds with the matched letter character.
+ *
+ * @see pDigit
+ */
+fun <U : Any> pLetter(): Parser<Char, Char, U> =
+    pLabel(pSatisfy { it.isLetter() }, "letter")
+
+/**
+ * Returns a [Parser] that consumes exactly one space character (`' '`).
+ *
+ * @return a [Parser] that succeeds with `' '`.
+ *
+ * @see pTab
+ * @see pSpaceOrTab
+ */
+fun <U : Any> pSpace(): Parser<Char, Char, U> =
+    pLabel(pChar(' '), "space")
+
+/**
+ * Returns a [Parser] that consumes exactly one tab character (`'\t'`).
+ *
+ * @return a [Parser] that succeeds with `'\t'`.
+ *
+ * @see pSpace
+ * @see pSpaceOrTab
+ */
+fun <U : Any> pTab(): Parser<Char, Char, U> =
+    pLabel(pChar('\t'), "tab")
+
+/**
+ * Returns a [Parser] that consumes exactly one space (`' '`) or tab (`'\t'`)
+ * character, whichever appears next in the input.
+ *
+ * @return a [Parser] that succeeds with the matched character.
+ *
+ * @see pSpace
+ * @see pTab
+ */
+fun <U : Any> pSpaceOrTab(): Parser<Char, Char, U> =
+    pLabel(pOr(pSpace(), pTab()), "space or tab")
+
 fun <U : Any> pInt(): Parser<Char, Int, U> {
     val sign = pOptional(pOr(pChar<U>('+'), pChar('-')))
     val digits = pMany1(pSatisfy<Char, U> { it.isDigit() })
