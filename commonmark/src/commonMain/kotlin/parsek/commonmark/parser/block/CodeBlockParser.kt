@@ -50,23 +50,18 @@ fun <U : Any> pIndentedCodeBlock(): Parser<Char, Block.IndentedCodeBlock, U> =
             while (true) {
                 val pos = ParserInput(input.input, idx, input.userContext)
 
-                // Determine whether the current line begins with a code-block indent.
-                val indentIdx: Int? = when {
-                    // Four consecutive spaces.
-                    idx + 4 <= input.input.size &&
-                        input.input[idx] == ' ' && input.input[idx + 1] == ' ' &&
-                        input.input[idx + 2] == ' ' && input.input[idx + 3] == ' ' -> idx + 4
-                    // One tab.
-                    idx < input.input.size && input.input[idx] == '\t' -> idx + 1
-                    else -> null
-                }
+                // Determine whether the current line begins with a code-block indent
+                // using virtual column counting (tabs expand to next tab stop).
+                val (virtualCols, _) = countVirtualIndent(input.input, idx)
 
-                if (indentIdx != null) {
+                if (virtualCols >= 4) {
+                    // Indented line: consume exactly 4 virtual columns.
+                    val (afterIndent, remainder) = consumeVirtualColumns(input.input, idx, 4)
                     // Indented line: commit any pending blank lines and this line.
                     val restResult = pRestOfLine<U>()(
-                        ParserInput(input.input, indentIdx, input.userContext)
+                        ParserInput(input.input, afterIndent, input.userContext)
                     ) as Success
-                    val line = restResult.value
+                    val line = " ".repeat(remainder) + restResult.value
                     val afterRest = restResult.nextIndex
 
                     when (val end = lineEnding(ParserInput(input.input, afterRest, input.userContext))) {

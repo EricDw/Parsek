@@ -29,16 +29,42 @@ private fun readRawLineLi(chars: List<Char>, startIdx: Int): Pair<String, Int> {
 
 private fun isBlankLi(s: String): Boolean = s.all { it == ' ' || it == '\t' }
 
-private fun countLeadingSpacesLi(s: String): Int {
-    var n = 0
-    while (n < s.length && s[n] == ' ') n++
-    return n
+/**
+ * Expands leading tabs in a string to spaces, given that the string starts at
+ * absolute column [startCol]. Non-whitespace characters and everything after them
+ * are preserved as-is.
+ */
+private fun expandLeadingTabs(s: String, startCol: Int): String {
+    var col = startCol
+    var i = 0
+    val sb = StringBuilder()
+    while (i < s.length && (s[i] == ' ' || s[i] == '\t')) {
+        if (s[i] == '\t') {
+            val nextStop = (col / 4 + 1) * 4
+            repeat(nextStop - col) { sb.append(' ') }
+            col = nextStop
+        } else {
+            sb.append(' ')
+            col++
+        }
+        i++
+    }
+    sb.append(s.substring(i))
+    return sb.toString()
 }
 
+private fun countLeadingSpacesLi(s: String): Int = countVirtualIndentStr(s)
+
 private fun stripLeadingSpacesLi(s: String, count: Int): String {
+    // Expand all leading whitespace (spaces+tabs) to virtual spaces, strip count, return rest.
+    var col = 0
     var i = 0
-    while (i < count && i < s.length && s[i] == ' ') i++
-    return s.substring(i)
+    while (i < s.length && (s[i] == ' ' || s[i] == '\t')) {
+        col = if (s[i] == '\t') (col / 4 + 1) * 4 else col + 1
+        i++
+    }
+    val remaining = col - count
+    return if (remaining > 0) " ".repeat(remaining) + s.substring(i) else s.substring(i)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +90,8 @@ private data class Marker(
     val orderedDelimiter: Char,
     val W: Int,
     val contentStartIdx: Int,
+    /** Virtual spaces remaining from a partially-consumed tab at the marker boundary. */
+    val remainderSpaces: Int = 0,
 )
 
 /**
@@ -82,8 +110,14 @@ private data class Marker(
  */
 private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
     var i = idx
+    // Count leading whitespace using virtual columns (tabs expand to next tab stop).
     var leading = 0
-    while (leading < 3 && i < chars.size && chars[i] == ' ') { leading++; i++ }
+    while (i < chars.size && (chars[i] == ' ' || chars[i] == '\t')) {
+        val nextCol = if (chars[i] == '\t') (leading / 4 + 1) * 4 else leading + 1
+        if (nextCol > 3) break  // 0–3 virtual columns only
+        leading = nextCol
+        i++
+    }
 
     // --- Bullet marker: -, +, or * ---
     val bc = chars.getOrNull(i)
@@ -92,29 +126,34 @@ private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
         if (afterBullet >= chars.size ||
             chars[afterBullet] == '\n' || chars[afterBullet] == '\r'
         ) {
-            // Empty first line (marker at end of line / EOF).
             return Marker(MarkerKind.BULLET, bc, 0, ' ',
                 W = leading + 1 + 1, contentStartIdx = afterBullet)
         }
         if (chars[afterBullet] != ' ' && chars[afterBullet] != '\t') return null
-        var spacesAfter = 0
-        var j = afterBullet
-        while (j < chars.size && (chars[j] == ' ' || chars[j] == '\t')) { spacesAfter++; j++ }
-        // If after consuming spaces we hit EOL/EOF, the first line is blank.
-        // W = leading + markerLen + 1 (only one space counts as part of marker).
+        // Count virtual spaces after the marker.
+        val colAfterMarker = leading + 1  // absolute column right after bullet
+        val (virtualSpacesAfter, j) = countVirtualIndent(chars, afterBullet, colAfterMarker)
         val firstLineBlank = j >= chars.size || chars[j] == '\n' || chars[j] == '\r'
         val effectiveSpaces = when {
             firstLineBlank -> 1
-            spacesAfter > 4 -> 1
-            else -> spacesAfter
+            virtualSpacesAfter > 4 -> 1
+            else -> virtualSpacesAfter
         }
+        // For contentStart, we need to consume exactly effectiveSpaces virtual columns.
+        var bulletRemainder = 0
         val contentStart = when {
-            firstLineBlank -> j  // point at the EOL
-            spacesAfter > 4 -> afterBullet + 1
+            firstLineBlank -> j
+            virtualSpacesAfter > 4 -> {
+                // Consume exactly 1 virtual space after marker.
+                val (ci, rem) = consumeVirtualColumns(chars, afterBullet, 1, colAfterMarker)
+                bulletRemainder = rem
+                ci
+            }
             else -> j
         }
         return Marker(MarkerKind.BULLET, bc, 0, ' ',
-            W = leading + 1 + effectiveSpaces, contentStartIdx = contentStart)
+            W = leading + 1 + effectiveSpaces, contentStartIdx = contentStart,
+            remainderSpaces = bulletRemainder)
     }
 
     // --- Ordered marker: 1–9 digits + '.' or ')' ---
@@ -134,23 +173,27 @@ private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
             W = leading + markerLen + 1, contentStartIdx = afterDelim)
     }
     if (chars[afterDelim] != ' ' && chars[afterDelim] != '\t') return null
-    var spacesAfter = 0
-    var j = afterDelim
-    while (j < chars.size && (chars[j] == ' ' || chars[j] == '\t')) { spacesAfter++; j++ }
-    // If after consuming spaces we hit EOL/EOF, the first line is blank.
+    val colAfterDelim = leading + markerLen
+    val (virtualSpacesAfter, j) = countVirtualIndent(chars, afterDelim, colAfterDelim)
     val firstLineBlankOrd = j >= chars.size || chars[j] == '\n' || chars[j] == '\r'
     val effectiveSpaces = when {
         firstLineBlankOrd -> 1
-        spacesAfter > 4 -> 1
-        else -> spacesAfter
+        virtualSpacesAfter > 4 -> 1
+        else -> virtualSpacesAfter
     }
+    var ordRemainder = 0
     val contentStart = when {
         firstLineBlankOrd -> j
-        spacesAfter > 4 -> afterDelim + 1
+        virtualSpacesAfter > 4 -> {
+            val (ci, rem) = consumeVirtualColumns(chars, afterDelim, 1, colAfterDelim)
+            ordRemainder = rem
+            ci
+        }
         else -> j
     }
     return Marker(MarkerKind.ORDERED, ' ', number, delim,
-        W = leading + markerLen + effectiveSpaces, contentStartIdx = contentStart)
+        W = leading + markerLen + effectiveSpaces, contentStartIdx = contentStart,
+        remainderSpaces = ordRemainder)
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +347,52 @@ private fun collectItemLines(
 // Internal parse-result type
 // ---------------------------------------------------------------------------
 
+/**
+ * Recursively finds the deepest open paragraph in a block structure and extends it
+ * with [lazyLines]. Traverses into the last block of block quotes, list items, and
+ * lists to find the innermost paragraph.
+ */
+private fun extendDeepestParagraph(blocks: MutableList<Block>, lazyLines: List<String>) {
+    // Try to find the deepest paragraph by traversing into nested containers.
+    val lastIdx = blocks.lastIndex
+    if (lastIdx < 0) return
+
+    when (val last = blocks[lastIdx]) {
+        is Block.Paragraph -> {
+            val existingText = last.inlines.filterIsInstance<Inline.Text>()
+                .joinToString("") { it.literal }
+            val extended = (existingText + "\n" + lazyLines.joinToString("\n")).trimEnd()
+            blocks[lastIdx] = Block.Paragraph(listOf(Inline.Text(extended)))
+        }
+        is Block.BlockQuote -> {
+            val innerBlocks = last.blocks.toMutableList()
+            extendDeepestParagraph(innerBlocks, lazyLines)
+            blocks[lastIdx] = Block.BlockQuote(innerBlocks)
+        }
+        is Block.BulletList -> {
+            val items = last.items.toMutableList()
+            if (items.isNotEmpty()) {
+                val lastItem = items.last()
+                val itemBlocks = lastItem.blocks.toMutableList()
+                extendDeepestParagraph(itemBlocks, lazyLines)
+                items[items.lastIndex] = Block.ListItem(itemBlocks)
+                blocks[lastIdx] = Block.BulletList(last.tight, last.marker, items)
+            }
+        }
+        is Block.OrderedList -> {
+            val items = last.items.toMutableList()
+            if (items.isNotEmpty()) {
+                val lastItem = items.last()
+                val itemBlocks = lastItem.blocks.toMutableList()
+                extendDeepestParagraph(itemBlocks, lazyLines)
+                items[items.lastIndex] = Block.ListItem(itemBlocks)
+                blocks[lastIdx] = Block.OrderedList(last.tight, last.start, last.delimiter, items)
+            }
+        }
+        else -> {} // Cannot extend non-container blocks
+    }
+}
+
 private data class ItemResult<U : Any>(
     val marker: Marker,
     val item: Block.ListItem,
@@ -318,7 +407,14 @@ private fun <U : Any> tryParseItem(
     blockFactory: () -> Parser<Char, Block, U>,
 ): ItemResult<U>? {
     val marker = detectMarker(chars, startIdx) ?: return null
-    val (firstContent, afterFirstLine) = readRawLineLi(chars, marker.contentStartIdx)
+    val (rawFirstContent, afterFirstLine) = readRawLineLi(chars, marker.contentStartIdx)
+    // Expand any remaining tabs in the first content line prefix to spaces,
+    // accounting for the absolute column position and remainder from marker detection.
+    val firstContent = if (marker.remainderSpaces > 0) {
+        " ".repeat(marker.remainderSpaces) + expandLeadingTabs(rawFirstContent, marker.W + marker.remainderSpaces)
+    } else {
+        expandLeadingTabs(rawFirstContent, marker.W)
+    }
     val collected = collectItemLines(chars, firstContent, afterFirstLine, marker.W)
 
     val hasLazyLines = collected.isLazy.any { it }
@@ -344,22 +440,14 @@ private fun <U : Any> tryParseItem(
                 val segResult = pMany(pBlock)(segInput) as Success
                 parsedBlocks.addAll(segResult.value)
             }
-            // Collect a run of lazy lines and extend the last paragraph.
+            // Collect a run of lazy lines and extend the deepest open paragraph.
             if (i < collected.lines.size && collected.isLazy[i]) {
                 val lazyLines = mutableListOf<String>()
                 while (i < collected.lines.size && collected.isLazy[i]) {
                     lazyLines.add(collected.lines[i])
                     i++
                 }
-                // Extend the last paragraph with lazy lines.
-                val lastIdx = parsedBlocks.indexOfLast { it is Block.Paragraph }
-                if (lastIdx >= 0) {
-                    val para = parsedBlocks[lastIdx] as Block.Paragraph
-                    val existingText = para.inlines.filterIsInstance<Inline.Text>()
-                        .joinToString("") { it.literal }
-                    val extended = (existingText + "\n" + lazyLines.joinToString("\n")).trimEnd()
-                    parsedBlocks[lastIdx] = Block.Paragraph(listOf(Inline.Text(extended)))
-                }
+                extendDeepestParagraph(parsedBlocks, lazyLines)
             }
         }
         blocks = parsedBlocks

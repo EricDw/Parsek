@@ -30,20 +30,67 @@ private fun isBlankLineBq(content: String): Boolean =
     content.all { it == ' ' || it == '\t' }
 
 /**
+ * Expands leading tabs in [s] to spaces, given that [s] starts at absolute column [startCol].
+ */
+private fun expandLeadingTabsBq(s: String, startCol: Int): String {
+    var col = startCol
+    var i = 0
+    val sb = StringBuilder()
+    while (i < s.length && (s[i] == ' ' || s[i] == '\t')) {
+        if (s[i] == '\t') {
+            val nextStop = (col / 4 + 1) * 4
+            repeat(nextStop - col) { sb.append(' ') }
+            col = nextStop
+        } else {
+            sb.append(' ')
+            col++
+        }
+        i++
+    }
+    sb.append(s.substring(i))
+    return sb.toString()
+}
+
+/**
+ * Result of consuming a block-quote marker.
+ *
+ * @property afterIdx index after the marker and optional space.
+ * @property remainderSpaces virtual spaces remaining from a partially-consumed tab.
+ */
+private data class BqMarkerResult(
+    val afterIdx: Int,
+    val remainderSpaces: Int,
+    /** Absolute column of the character at [afterIdx]. Used for tab expansion. */
+    val contentCol: Int,
+)
+
+/**
  * If the characters starting at [idx] begin with a block-quote marker
- * (`>` preceded by 0–3 spaces), returns the index immediately after the
- * marker and the optional single space that follows it. Returns `null`
+ * (`>` preceded by 0–3 spaces), returns a [BqMarkerResult] with the index
+ * immediately after the marker and the optional single space that follows it,
+ * plus any remainder spaces from a partially-consumed tab. Returns `null`
  * if no block-quote marker is present.
  */
-private fun consumeBlockQuoteMarker(chars: List<Char>, idx: Int): Int? {
+private fun consumeBlockQuoteMarker(chars: List<Char>, idx: Int): BqMarkerResult? {
     var i = idx
     var spaces = 0
     while (spaces < 3 && i < chars.size && chars[i] == ' ') { spaces++; i++ }
     if (i >= chars.size || chars[i] != '>') return null
     i++ // consume '>'
-    // Consume exactly one optional space after '>'.
-    if (i < chars.size && chars[i] == ' ') i++
-    return i
+    // Consume exactly one optional space (or the first virtual space of a tab) after '>'.
+    val colAfterGt = spaces + 1
+    if (i < chars.size && chars[i] == ' ') {
+        return BqMarkerResult(i + 1, 0, colAfterGt + 1)
+    }
+    if (i < chars.size && chars[i] == '\t') {
+        // Tab after '>': expands to the next tab stop from the column after '>'.
+        // One virtual space is consumed as the optional space; the rest are remainder.
+        val nextStop = (colAfterGt / 4 + 1) * 4
+        val tabWidth = nextStop - colAfterGt
+        // One space consumed as optional space; remainder = tabWidth - 1
+        return BqMarkerResult(i + 1, tabWidth - 1, nextStop)
+    }
+    return BqMarkerResult(i, 0, colAfterGt)
 }
 
 // ---------------------------------------------------------------------------
@@ -206,17 +253,23 @@ fun <U : Any> pBlockQuote(
             var fenceLen = 0
 
             while (idx < chars.size) {
-                val afterMark = consumeBlockQuoteMarker(chars, idx)
-                if (afterMark != null) {
+                val markerResult = consumeBlockQuoteMarker(chars, idx)
+                if (markerResult != null) {
                     // Block-quote-marked line: strip the marker and collect the content.
                     seenMark = true
-                    val (content, nextIdx) = readRawLineBq(chars, afterMark)
-                    blockLines.add(content)
+                    val (content, nextIdx) = readRawLineBq(chars, markerResult.afterIdx)
+                    val adjustedContent = if (markerResult.remainderSpaces > 0) {
+                        " ".repeat(markerResult.remainderSpaces) +
+                            expandLeadingTabsBq(content, markerResult.contentCol)
+                    } else {
+                        content
+                    }
+                    blockLines.add(adjustedContent)
                     isLazyLine.add(false)
                     idx = nextIdx
                     // Update inner state to determine if lazy continuation is allowed.
                     canLazyContinue = updateBlockQuoteInnerState(
-                        content, inFencedCode, fenceChar, fenceLen
+                        adjustedContent, inFencedCode, fenceChar, fenceLen
                     ) { inFenced, fc, fl ->
                         inFencedCode = inFenced
                         fenceChar = fc
