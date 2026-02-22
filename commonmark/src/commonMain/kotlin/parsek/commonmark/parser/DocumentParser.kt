@@ -39,8 +39,8 @@ import parsek.text.pBlankLine
  * 6. Link reference definition
  * 7. Block quote (recursive)
  * 8. List (recursive)
- * 9. Setext heading (after list to avoid `---` ambiguity)
- * 10. Indented code block
+ * 9. Indented code block (before setext so `    foo` is not treated as setext content)
+ * 10. Setext heading (after indented code block and list to avoid `---` ambiguity)
  * 11. Paragraph (fallback)
  *
  * Container blocks ([Block.BlockQuote], list types) recursively call `pBlock`
@@ -59,8 +59,8 @@ fun <U : Any> pBlock(): Parser<Char, Block, U> =
             pLinkReferenceDefinition(),
             pBlockQuote { pBlock() },
             pList { pBlock() },
-            pSetextHeading(),
             pIndentedCodeBlock(),
+            pSetextHeading(),
             pParagraph(),
         ),
         "block",

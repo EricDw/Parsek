@@ -83,6 +83,7 @@ fun <U : Any> pBlockQuote(
             var idx = input.index
             val blockLines = mutableListOf<String>()
             var seenMark = false
+            var canLazyContinue = false  // true only after a non-blank marked paragraph line
 
             while (idx < chars.size) {
                 val afterMark = consumeBlockQuoteMarker(chars, idx)
@@ -92,11 +93,15 @@ fun <U : Any> pBlockQuote(
                     val (content, nextIdx) = readRawLineBq(chars, afterMark)
                     blockLines.add(content)
                     idx = nextIdx
+                    // Allow lazy continuation only after non-blank marked lines
+                    canLazyContinue = !isBlankLineBq(content)
                 } else {
                     // No marker on this line.
                     val (content, nextIdx) = readRawLineBq(chars, idx)
-                    if (!seenMark || isBlankLineBq(content)) break
-                    // Lazy continuation: a non-blank line following a marked line.
+                    if (!canLazyContinue || isBlankLineBq(content)) break
+                    // Lazy continuation is only valid for paragraph continuation lines.
+                    // Lines that would start a new block type cannot be lazy-continued.
+                    if (canInterruptParagraph(chars, idx)) break
                     blockLines.add(content)
                     idx = nextIdx
                 }

@@ -286,20 +286,26 @@ fun <U : Any> pLinkReferenceDefinition(): Parser<Char, Block.LinkReferenceDefini
                 while (idx < chars.size && (chars[idx] == ' ' || chars[idx] == '\t')) idx++
             }
 
-            val title: String?
+            var title: String? = null
             val c = chars.getOrNull(idx)
+            var titleParsed = false
             if ((hadWsAfterDest || hadLineEndingAfterDest) && (c == '"' || c == '\'' || c == '(')) {
-                // Title-start found and there is adequate separation — title is required here.
-                val (t, afterTitle) = parseLinkTitle(chars, idx)
-                    ?: return@Parser Failure("link reference definition", input.index, input)
-                // After the title, only optional spaces/tabs then EOL/EOF.
-                var checkIdx = afterTitle
-                while (checkIdx < chars.size && (chars[checkIdx] == ' ' || chars[checkIdx] == '\t')) checkIdx++
-                if (checkIdx < chars.size && chars[checkIdx] != '\n' && chars[checkIdx] != '\r')
-                    return@Parser Failure("link reference definition", input.index, input)
-                title = t
-                idx = consumeLineEnding(chars, checkIdx)
-            } else {
+                // Title-start found — try to parse it. If the title is syntactically
+                // valid AND the remainder of the line is clean, accept the title.
+                // Otherwise fall through to the no-title branch.
+                val titleResult = parseLinkTitle(chars, idx)
+                if (titleResult != null) {
+                    val (t, afterTitle) = titleResult
+                    var checkIdx = afterTitle
+                    while (checkIdx < chars.size && (chars[checkIdx] == ' ' || chars[checkIdx] == '\t')) checkIdx++
+                    if (checkIdx >= chars.size || chars[checkIdx] == '\n' || chars[checkIdx] == '\r') {
+                        title = t
+                        idx = consumeLineEnding(chars, checkIdx)
+                        titleParsed = true
+                    }
+                }
+            }
+            if (!titleParsed) {
                 // No title. The definition ends at the end of the destination line.
                 // Backtrack to right after the destination and verify the line is clean.
                 title = null

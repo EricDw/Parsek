@@ -91,7 +91,7 @@ private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
         if (afterBullet >= chars.size ||
             chars[afterBullet] == '\n' || chars[afterBullet] == '\r'
         ) {
-            // Empty first line.
+            // Empty first line (marker at end of line / EOF).
             return Marker(MarkerKind.BULLET, bc, 0, ' ',
                 W = leading + 1 + 1, contentStartIdx = afterBullet)
         }
@@ -99,8 +99,19 @@ private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
         var spacesAfter = 0
         var j = afterBullet
         while (j < chars.size && (chars[j] == ' ' || chars[j] == '\t')) { spacesAfter++; j++ }
-        val effectiveSpaces = if (spacesAfter > 4) 1 else spacesAfter
-        val contentStart = if (spacesAfter > 4) afterBullet + 1 else j
+        // If after consuming spaces we hit EOL/EOF, the first line is blank.
+        // W = leading + markerLen + 1 (only one space counts as part of marker).
+        val firstLineBlank = j >= chars.size || chars[j] == '\n' || chars[j] == '\r'
+        val effectiveSpaces = when {
+            firstLineBlank -> 1
+            spacesAfter > 4 -> 1
+            else -> spacesAfter
+        }
+        val contentStart = when {
+            firstLineBlank -> j  // point at the EOL
+            spacesAfter > 4 -> afterBullet + 1
+            else -> j
+        }
         return Marker(MarkerKind.BULLET, bc, 0, ' ',
             W = leading + 1 + effectiveSpaces, contentStartIdx = contentStart)
     }
@@ -125,10 +136,47 @@ private fun detectMarker(chars: List<Char>, idx: Int): Marker? {
     var spacesAfter = 0
     var j = afterDelim
     while (j < chars.size && (chars[j] == ' ' || chars[j] == '\t')) { spacesAfter++; j++ }
-    val effectiveSpaces = if (spacesAfter > 4) 1 else spacesAfter
-    val contentStart = if (spacesAfter > 4) afterDelim + 1 else j
+    // If after consuming spaces we hit EOL/EOF, the first line is blank.
+    val firstLineBlankOrd = j >= chars.size || chars[j] == '\n' || chars[j] == '\r'
+    val effectiveSpaces = when {
+        firstLineBlankOrd -> 1
+        spacesAfter > 4 -> 1
+        else -> spacesAfter
+    }
+    val contentStart = when {
+        firstLineBlankOrd -> j
+        spacesAfter > 4 -> afterDelim + 1
+        else -> j
+    }
     return Marker(MarkerKind.ORDERED, ' ', number, delim,
         W = leading + markerLen + effectiveSpaces, contentStartIdx = contentStart)
+}
+
+// ---------------------------------------------------------------------------
+// Thematic break detection (for list interruption)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` if the line starting at [startIdx] in [chars] is a thematic break.
+ * A thematic break is 0–3 spaces, then 3+ of the same marker (`-`, `_`, `*`),
+ * optionally interspersed with spaces/tabs, then only spaces/tabs until EOL/EOF.
+ */
+internal fun isThematicBreakLine(chars: List<Char>, startIdx: Int): Boolean {
+    var i = startIdx
+    var spaces = 0
+    while (spaces < 3 && i < chars.size && chars[i] == ' ') { spaces++; i++ }
+    val marker = chars.getOrNull(i)
+    if (marker != '-' && marker != '_' && marker != '*') return false
+    var count = 0
+    while (i < chars.size && chars[i] != '\n' && chars[i] != '\r') {
+        when (chars[i]) {
+            marker -> count++
+            ' ', '\t' -> {}
+            else -> return false
+        }
+        i++
+    }
+    return count >= 3
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +209,7 @@ private fun collectItemLines(
     W: Int,
 ): CollectedLines {
     val lines = mutableListOf<String>()
+    val firstIsBlank = firstContent.isEmpty() || isBlankLi(firstContent)
     if (firstContent.isNotEmpty()) lines.add(firstContent)
 
     var idx = afterFirstLine
@@ -172,6 +221,9 @@ private fun collectItemLines(
         val (lineContent, nextIdx) = readRawLineLi(chars, idx)
         when {
             isBlankLi(lineContent) -> {
+                // If the first line was blank (empty item), a blank line
+                // terminates the item immediately (no continuation allowed).
+                if (firstIsBlank) break
                 pendingBlanks++
                 idx = nextIdx
             }
@@ -297,6 +349,9 @@ fun <U : Any> pList(
                     blankCount++
                     tempIdx = nIdx
                 }
+
+                // A thematic break terminates the list.
+                if (isThematicBreakLine(chars, tempIdx)) break
 
                 // Try to parse the next item (possibly after blank lines).
                 val next = tryParseItem(chars, tempIdx, input, blockFactory) ?: break

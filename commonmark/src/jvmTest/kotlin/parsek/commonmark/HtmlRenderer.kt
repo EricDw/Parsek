@@ -102,12 +102,19 @@ private fun renderBlock(sb: StringBuilder, block: Block, tight: Boolean) {
 private fun renderListItem(sb: StringBuilder, item: Block.ListItem, tight: Boolean) {
     sb.append("<li>")
     if (tight) {
-        // Tight: render content without <p> wrappers, inline
-        val rendered = StringBuilder()
-        renderBlocks(rendered, item.blocks, tight = true)
-        val trimmed = rendered.toString().trimEnd('\n')
-        if (trimmed.isNotEmpty()) {
-            sb.append(trimmed)
+        // Tight: render paragraphs without <p> wrappers.
+        // Non-paragraph blocks (hr, code, headings, etc.) get newline separators.
+        val hasNonParagraph = item.blocks.any { it !is Block.Paragraph && it !is Block.BlankLine }
+        if (hasNonParagraph) {
+            sb.append("\n")
+            renderBlocks(sb, item.blocks, tight = true)
+        } else {
+            val rendered = StringBuilder()
+            renderBlocks(rendered, item.blocks, tight = true)
+            val trimmed = rendered.toString().trimEnd('\n')
+            if (trimmed.isNotEmpty()) {
+                sb.append(trimmed)
+            }
         }
     } else {
         sb.append("\n")

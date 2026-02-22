@@ -225,14 +225,14 @@ private fun parseOpenTagTo(chars: List<Char>, startIdx: Int): Int? {
             when (chars[i]) {
                 '"' -> {
                     i++
-                    while (i < chars.size && chars[i] != '"') i++
-                    if (i >= chars.size) return null
+                    while (i < chars.size && chars[i] != '"' && chars[i] != '\n' && chars[i] != '\r') i++
+                    if (i >= chars.size || chars[i] != '"') return null
                     i++ // consume closing "
                 }
                 '\'' -> {
                     i++
-                    while (i < chars.size && chars[i] != '\'') i++
-                    if (i >= chars.size) return null
+                    while (i < chars.size && chars[i] != '\'' && chars[i] != '\n' && chars[i] != '\r') i++
+                    if (i >= chars.size || chars[i] != '\'') return null
                     i++ // consume closing '
                 }
                 else -> {

@@ -28,6 +28,162 @@ private fun advancePastLineEnding(chars: List<Char>, idx: Int): Int = when {
     else -> idx
 }
 
+// ---------------------------------------------------------------------------
+// Paragraph interrupt detection (§4.9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` if the line starting at [startIdx] would interrupt a paragraph.
+ *
+ * Per CommonMark §4.9, a paragraph can be interrupted by:
+ * - A thematic break
+ * - An ATX heading
+ * - A fenced code block opening fence
+ * - A block quote marker (`>`)
+ * - A bullet list item marker
+ * - An ordered list item with start number 1
+ * - An HTML block start condition (types 1–6 only; type 7 cannot interrupt)
+ */
+internal fun canInterruptParagraph(chars: List<Char>, startIdx: Int): Boolean {
+    // Skip 0–3 leading spaces
+    var i = startIdx
+    var spaces = 0
+    while (spaces < 3 && i < chars.size && chars[i] == ' ') { spaces++; i++ }
+
+    if (i >= chars.size) return false
+    val c = chars[i]
+
+    // Thematic break
+    if (isThematicBreakLine(chars, startIdx)) return true
+
+    // ATX heading: 1-6 '#' then space/tab/EOL
+    if (c == '#') {
+        var hashes = 0
+        var j = i
+        while (j < chars.size && chars[j] == '#') { hashes++; j++ }
+        if (hashes in 1..6) {
+            val after = chars.getOrNull(j)
+            if (after == null || after == ' ' || after == '\t' || after == '\n' || after == '\r') return true
+        }
+    }
+
+    // Fenced code block: 3+ backticks or tildes
+    if (c == '`' || c == '~') {
+        var count = 0
+        var j = i
+        while (j < chars.size && chars[j] == c) { count++; j++ }
+        if (count >= 3) return true
+    }
+
+    // Block quote marker
+    if (c == '>') return true
+
+    // Bullet list marker: -, +, * followed by space/tab then non-blank content.
+    // An empty list item (marker + EOL or marker alone) cannot interrupt a paragraph.
+    if (c == '-' || c == '+' || c == '*') {
+        val after = chars.getOrNull(i + 1)
+        if (after == ' ' || after == '\t') {
+            // Check there is non-blank content after the spaces
+            var j = i + 1
+            while (j < chars.size && (chars[j] == ' ' || chars[j] == '\t')) j++
+            val nc = chars.getOrNull(j)
+            if (nc != null && nc != '\n' && nc != '\r') return true
+        }
+    }
+
+    // Ordered list: must start at 1 to interrupt a paragraph.
+    // An empty ordered list item cannot interrupt a paragraph.
+    if (c.isDigit()) {
+        var j = i
+        while (j < chars.size && chars[j].isDigit()) j++
+        val digitCount = j - i
+        if (digitCount in 1..9) {
+            val delim = chars.getOrNull(j)
+            if (delim == '.' || delim == ')') {
+                val number = chars.subList(i, j).joinToString("").toInt()
+                if (number == 1) {
+                    val after = chars.getOrNull(j + 1)
+                    if (after == ' ' || after == '\t') {
+                        // Check there is non-blank content after the spaces
+                        var k = j + 1
+                        while (k < chars.size && (chars[k] == ' ' || chars[k] == '\t')) k++
+                        val nc = chars.getOrNull(k)
+                        if (nc != null && nc != '\n' && nc != '\r') return true
+                    }
+                }
+            }
+        }
+    }
+
+    // HTML block types 1–6 (type 7 cannot interrupt a paragraph)
+    if (c == '<') {
+        if (isHtmlBlockInterrupt(chars, i)) return true
+    }
+
+    return false
+}
+
+/**
+ * Checks if `<` at position [idx] starts an HTML block of type 1–6.
+ *
+ * These are fast, inline checks matching the most common patterns.
+ */
+private val HTML_BLOCK_TAGS_TYPE1 = listOf("pre", "script", "style", "textarea")
+private val HTML_BLOCK_TAGS_TYPE6 = setOf(
+    "address", "article", "aside", "base", "basefont", "blockquote", "body",
+    "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+    "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+    "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+    "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
+    "meta", "nav", "noframes", "ol", "optgroup", "option", "p", "param",
+    "search", "section", "summary", "table", "tbody", "td", "tfoot", "th",
+    "thead", "title", "tr", "track", "ul",
+)
+
+private fun isHtmlBlockInterrupt(chars: List<Char>, idx: Int): Boolean {
+    if (idx >= chars.size || chars[idx] != '<') return false
+
+    // Type 2: <!--
+    if (matchesAt(chars, idx, "<!--")) return true
+    // Type 3: <?
+    if (chars.getOrNull(idx + 1) == '?') return true
+    // Type 4: <! + uppercase letter
+    if (chars.getOrNull(idx + 1) == '!' && chars.getOrNull(idx + 2)?.let { it in 'A'..'Z' } == true) return true
+    // Type 5: <![CDATA[
+    if (matchesAt(chars, idx, "<![CDATA[")) return true
+
+    // Type 1: <pre, <script, <style, <textarea (case-insensitive)
+    for (tag in HTML_BLOCK_TAGS_TYPE1) {
+        if (matchesAtIgnoreCase(chars, idx + 1, tag)) {
+            val after = chars.getOrNull(idx + 1 + tag.length)
+            if (after == null || after == ' ' || after == '\t' || after == '\n' || after == '\r' || after == '>') return true
+        }
+    }
+
+    // Type 6: block-level open/close tag
+    var j = idx + 1
+    val isClose = j < chars.size && chars[j] == '/'
+    if (isClose) j++
+    if (j >= chars.size || !chars[j].isLetter()) return false
+    val nameStart = j
+    while (j < chars.size && (chars[j].isLetterOrDigit() || chars[j] == '-')) j++
+    val name = chars.subList(nameStart, j).joinToString("").lowercase()
+    if (name !in HTML_BLOCK_TAGS_TYPE6) return false
+    val after = chars.getOrNull(j)
+    return after == null || after == ' ' || after == '\t' || after == '\n' || after == '\r' || after == '>' ||
+        (after == '/' && chars.getOrNull(j + 1) == '>')
+}
+
+private fun matchesAt(chars: List<Char>, idx: Int, s: String): Boolean {
+    if (idx + s.length > chars.size) return false
+    return s.indices.all { chars[idx + it] == s[it] }
+}
+
+private fun matchesAtIgnoreCase(chars: List<Char>, idx: Int, s: String): Boolean {
+    if (idx + s.length > chars.size) return false
+    return s.indices.all { chars[idx + it].equals(s[it], ignoreCase = true) }
+}
+
 /**
  * Reads one line of content (without the line ending) starting at [startIdx].
  *
@@ -115,6 +271,10 @@ fun <U : Any> pSetextHeading(): Parser<Char, Block.Heading, U> =
                 }
 
                 // Read the next potential content line.
+                // If we already have content, check if this line would interrupt
+                // a paragraph — setext heading content follows the same rules.
+                if (contentLines.isNotEmpty() && canInterruptParagraph(chars, idx)) break
+
                 val (lineContent, nextIdx) = readLineContent(chars, idx)
                 if (isBlankLine(lineContent)) break  // blank line terminates search → fail
                 contentLines.add(stripUpTo3Spaces(lineContent))
@@ -155,6 +315,10 @@ fun <U : Any> pParagraph(): Parser<Char, Block.Paragraph, U> =
             val contentLines = mutableListOf<String>()
 
             while (idx < chars.size) {
+                // On continuation lines (not the first), check if this line
+                // would start a block that can interrupt a paragraph (§4.9).
+                if (contentLines.isNotEmpty() && canInterruptParagraph(chars, idx)) break
+
                 val (lineContent, nextIdx) = readLineContent(chars, idx)
                 if (isBlankLine(lineContent)) break
                 // Strip leading whitespace from each paragraph content line
