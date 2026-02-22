@@ -111,8 +111,11 @@ class PRawHtmlTest {
     }
 
     @Test
-    fun failureCommentStartsWithGt() {
-        assertIs<Failure<Char, Unit>>(parse("<!-->"))
+    fun degenerateCommentStartsWithGt() {
+        // <!--> is a valid degenerate HTML comment per HTML5 / CommonMark spec example 626.
+        val result = parse("<!-->")
+        assertIs<Success<Char, Inline, Unit>>(result)
+        assertEquals(Inline.RawHtml("<!-->"), result.value)
     }
 
     @Test

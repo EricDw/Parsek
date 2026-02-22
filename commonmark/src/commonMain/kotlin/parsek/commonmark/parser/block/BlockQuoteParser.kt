@@ -5,8 +5,8 @@ import parsek.Parser
 import parsek.ParserInput
 import parsek.Success
 import parsek.commonmark.ast.Block
+import parsek.commonmark.ast.Inline
 import parsek.pLabel
-import parsek.pMany
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -47,6 +47,120 @@ private fun consumeBlockQuoteMarker(chars: List<Char>, idx: Int): Int? {
 }
 
 // ---------------------------------------------------------------------------
+// Inner state tracking for lazy continuation
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` if [content] is a setext heading underline: one or more
+ * `=` or `-` characters, optionally preceded by up to 3 spaces, with optional
+ * trailing spaces.
+ */
+private fun isSetextUnderline(content: String): Boolean {
+    var i = 0
+    var spaces = 0
+    while (spaces < 3 && i < content.length && content[i] == ' ') { spaces++; i++ }
+    if (i >= content.length) return false
+    val ch = content[i]
+    if (ch != '=' && ch != '-') return false
+    while (i < content.length && content[i] == ch) i++
+    while (i < content.length && (content[i] == ' ' || content[i] == '\t')) i++
+    return i == content.length
+}
+
+/**
+ * Returns `true` if [content] starts an indented code block (4+ leading spaces).
+ */
+private fun startsIndentedCode(content: String): Boolean {
+    var spaces = 0
+    for (ch in content) {
+        if (ch == ' ') spaces++ else break
+    }
+    return spaces >= 4
+}
+
+/**
+ * Returns `true` if [content] opens a fenced code block (3+ backticks or tildes).
+ * Also sets [outChar] and [outLen] via the callback.
+ */
+private fun detectFenceOpening(content: String): Triple<Boolean, Char, Int>? {
+    var i = 0
+    var spaces = 0
+    while (spaces < 3 && i < content.length && content[i] == ' ') { spaces++; i++ }
+    if (i >= content.length) return null
+    val ch = content[i]
+    if (ch != '`' && ch != '~') return null
+    var count = 0
+    while (i < content.length && content[i] == ch) { count++; i++ }
+    if (count < 3) return null
+    // Backtick fences: info string must not contain backticks
+    if (ch == '`') {
+        for (j in i until content.length) {
+            if (content[j] == '`') return null
+        }
+    }
+    return Triple(true, ch, count)
+}
+
+/**
+ * Returns `true` if [content] closes a fenced code block opened with [fenceChar]
+ * of length [fenceLen].
+ */
+private fun isFenceClosing(content: String, fenceChar: Char, fenceLen: Int): Boolean {
+    var i = 0
+    var spaces = 0
+    while (spaces < 3 && i < content.length && content[i] == ' ') { spaces++; i++ }
+    if (i >= content.length || content[i] != fenceChar) return false
+    var count = 0
+    while (i < content.length && content[i] == fenceChar) { count++; i++ }
+    if (count < fenceLen) return false
+    while (i < content.length) {
+        if (content[i] != ' ' && content[i] != '\t') return false
+        i++
+    }
+    return true
+}
+
+/**
+ * Updates the inner block state of the block quote after processing a marked line.
+ * Returns whether lazy continuation is allowed after this line.
+ */
+private inline fun updateBlockQuoteInnerState(
+    content: String,
+    inFencedCode: Boolean,
+    fenceChar: Char,
+    fenceLen: Int,
+    updateState: (inFenced: Boolean, fenceChar: Char, fenceLen: Int) -> Unit,
+): Boolean {
+    if (inFencedCode) {
+        // Check for closing fence
+        if (isFenceClosing(content, fenceChar, fenceLen)) {
+            updateState(false, ' ', 0)
+            return false  // just closed a fenced block — not in a paragraph
+        }
+        return false  // inside fenced code — no lazy continuation
+    }
+
+    if (isBlankLineBq(content)) {
+        return false  // blank line breaks paragraph context
+    }
+
+    // Check if this line opens a fenced code block
+    val fence = detectFenceOpening(content)
+    if (fence != null) {
+        updateState(true, fence.second, fence.third)
+        return false  // just opened a fenced block
+    }
+
+    // Check if this line starts an indented code block
+    if (startsIndentedCode(content)) {
+        return false  // indented code block — no lazy continuation
+    }
+
+    // Otherwise, this line is part of a paragraph (or starts one)
+    return true
+}
+
+// ---------------------------------------------------------------------------
 // pBlockQuote
 // ---------------------------------------------------------------------------
 
@@ -82,8 +196,14 @@ fun <U : Any> pBlockQuote(
             val chars = input.input
             var idx = input.index
             val blockLines = mutableListOf<String>()
+            val isLazyLine = mutableListOf<Boolean>()
             var seenMark = false
-            var canLazyContinue = false  // true only after a non-blank marked paragraph line
+            // Lazy continuation is only valid when the inner content's last open
+            // block is a paragraph. We track this with a simple state machine.
+            var canLazyContinue = false
+            var inFencedCode = false   // inside a fenced code block (opened but not closed)
+            var fenceChar: Char = ' '
+            var fenceLen = 0
 
             while (idx < chars.size) {
                 val afterMark = consumeBlockQuoteMarker(chars, idx)
@@ -92,9 +212,16 @@ fun <U : Any> pBlockQuote(
                     seenMark = true
                     val (content, nextIdx) = readRawLineBq(chars, afterMark)
                     blockLines.add(content)
+                    isLazyLine.add(false)
                     idx = nextIdx
-                    // Allow lazy continuation only after non-blank marked lines
-                    canLazyContinue = !isBlankLineBq(content)
+                    // Update inner state to determine if lazy continuation is allowed.
+                    canLazyContinue = updateBlockQuoteInnerState(
+                        content, inFencedCode, fenceChar, fenceLen
+                    ) { inFenced, fc, fl ->
+                        inFencedCode = inFenced
+                        fenceChar = fc
+                        fenceLen = fl
+                    }
                 } else {
                     // No marker on this line.
                     val (content, nextIdx) = readRawLineBq(chars, idx)
@@ -103,6 +230,7 @@ fun <U : Any> pBlockQuote(
                     // Lines that would start a new block type cannot be lazy-continued.
                     if (canInterruptParagraph(chars, idx)) break
                     blockLines.add(content)
+                    isLazyLine.add(true)
                     idx = nextIdx
                 }
             }
@@ -113,10 +241,54 @@ fun <U : Any> pBlockQuote(
             // Recursively parse the stripped content as a sequence of blocks.
             val innerText = blockLines.joinToString("\n") + "\n"
             val innerChars = innerText.toList()
-            val innerInput = ParserInput(innerChars, 0, input.userContext)
             val pBlock = blockFactory()
-            val blocksResult = pMany(pBlock)(innerInput) as Success
-            val blocks = blocksResult.value
+
+            // Parse blocks one by one to track positions for lazy-setext fixup.
+            val blocks = mutableListOf<Block>()
+            // Precompute line start offsets in innerText.
+            val lineStartOffsets = mutableListOf<Int>()
+            var off = 0
+            for (line in blockLines) {
+                lineStartOffsets.add(off)
+                off += line.length + 1  // +1 for '\n'
+            }
+
+            var pos = 0
+            while (pos < innerChars.size) {
+                val currentInput = ParserInput(innerChars, pos, input.userContext)
+                val result = pBlock(currentInput)
+                if (result is Success) {
+                    var block = result.value
+                    val blockEndPos = result.nextIndex
+
+                    // Fix setext headings formed via lazy continuation underlines.
+                    // Per spec §4.3: "a setext heading underline cannot be a lazy
+                    // continuation line in a block quote or list item."
+                    if (block is Block.Heading && (block.level == 1 || block.level == 2)) {
+                        // Find the line index of the character just before blockEndPos.
+                        val underlineLineIdx = lineStartOffsets.indexOfLast { it < blockEndPos }
+                        if (underlineLineIdx >= 0 && underlineLineIdx < isLazyLine.size &&
+                            isLazyLine[underlineLineIdx] && isSetextUnderline(blockLines[underlineLineIdx])
+                        ) {
+                            // The underline was a lazy continuation line — convert to paragraph.
+                            // Re-parse from `pos` using only the paragraph parser.
+                            val paraText = blockLines.subList(
+                                lineStartOffsets.indexOfFirst { it >= pos },
+                                underlineLineIdx + 1,
+                            ).joinToString("\n").trimEnd()
+                            block = Block.Paragraph(
+                                if (paraText.isEmpty()) emptyList()
+                                else listOf(Inline.Text(paraText))
+                            )
+                        }
+                    }
+
+                    blocks.add(block)
+                    pos = blockEndPos
+                } else {
+                    break
+                }
+            }
 
             Success(Block.BlockQuote(blocks), idx, input)
         },

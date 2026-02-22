@@ -106,14 +106,14 @@ class PListItemTest {
     }
 
     @Test
-    fun unindentedLineEndsItem() {
-        // "next" has 0 spaces < W=2 → not a continuation; item ends after first line.
+    fun unindentedLineIsLazyContinuation() {
+        // "next" has 0 spaces < W=2, but it's a valid lazy paragraph continuation
+        // per §5.2 (doesn't interrupt a paragraph, doesn't start a new block).
         val result = parse("- foo\nnext\n")
         assertIs<Success<Char, Block.ListItem, Unit>>(result)
         val para = result.value.blocks.first() as Block.Paragraph
-        assertEquals(listOf(Inline.Text("foo")), para.inlines)
-        // nextIndex points just past "- foo\n".
-        assertEquals("- foo\n".length, result.nextIndex)
+        assertEquals(listOf(Inline.Text("foo\nnext")), para.inlines)
+        assertEquals("- foo\nnext\n".length, result.nextIndex)
     }
 
     // -------------------------------------------------------------------------

@@ -101,16 +101,39 @@ private fun renderBlock(sb: StringBuilder, block: Block, tight: Boolean) {
 
 private fun renderListItem(sb: StringBuilder, item: Block.ListItem, tight: Boolean) {
     sb.append("<li>")
+    val blocks = item.blocks.filter { it !is Block.BlankLine }
+    if (blocks.isEmpty()) {
+        // Empty item: <li></li>
+        sb.append("</li>\n")
+        return
+    }
     if (tight) {
         // Tight: render paragraphs without <p> wrappers.
-        // Non-paragraph blocks (hr, code, headings, etc.) get newline separators.
-        val hasNonParagraph = item.blocks.any { it !is Block.Paragraph && it !is Block.BlankLine }
+        val hasNonParagraph = blocks.any { it !is Block.Paragraph }
         if (hasNonParagraph) {
-            sb.append("\n")
-            renderBlocks(sb, item.blocks, tight = true)
+            // Render first paragraph (if any) directly after <li> on same line,
+            // then remaining blocks with newline separators.
+            val rendered = StringBuilder()
+            val first = blocks.first()
+            if (first is Block.Paragraph) {
+                renderInlines(rendered, first.inlines)
+                rendered.append("\n")
+                renderBlocks(rendered, blocks.drop(1), tight = true)
+            } else {
+                rendered.append("\n")
+                renderBlocks(rendered, blocks, tight = true)
+            }
+            // Trim trailing newline only if last block is a tight paragraph,
+            // so the text sits directly before </li>.
+            val last = blocks.last()
+            if (last is Block.Paragraph) {
+                sb.append(rendered.toString().trimEnd('\n'))
+            } else {
+                sb.append(rendered)
+            }
         } else {
             val rendered = StringBuilder()
-            renderBlocks(rendered, item.blocks, tight = true)
+            renderBlocks(rendered, blocks, tight = true)
             val trimmed = rendered.toString().trimEnd('\n')
             if (trimmed.isNotEmpty()) {
                 sb.append(trimmed)
@@ -118,7 +141,7 @@ private fun renderListItem(sb: StringBuilder, item: Block.ListItem, tight: Boole
         }
     } else {
         sb.append("\n")
-        renderBlocks(sb, item.blocks, tight = false)
+        renderBlocks(sb, blocks, tight = false)
     }
     sb.append("</li>\n")
 }

@@ -226,13 +226,12 @@ class PListTest {
     }
 
     @Test
-    fun nextIndexDoesNotConsumeFollowingParagraph() {
+    fun lazyParagraphContinuationConsumed() {
         val result = parse("- foo\nbar\n")
         assertIs<Success<Char, Block, Unit>>(result)
         val list = result.value as Block.BulletList
-        // "bar" is not a list item — it's a continuation of "foo" if W allows it,
-        // but W=2 and "bar" has 0 spaces → not a continuation. So only "- foo" is consumed.
-        assertEquals("- foo\n".length, result.nextIndex)
+        // "bar" has 0 spaces < W=2, but per §5.2 laziness, it continues the paragraph.
+        assertEquals("- foo\nbar\n".length, result.nextIndex)
         assertEquals(1, list.items.size)
     }
 

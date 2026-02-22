@@ -5,6 +5,7 @@ import parsek.Parser
 import parsek.ParserInput
 import parsek.Success
 import parsek.commonmark.ast.Block
+import parsek.commonmark.ast.Inline
 import parsek.pLabel
 import parsek.pMany
 
@@ -180,6 +181,25 @@ internal fun isThematicBreakLine(chars: List<Char>, startIdx: Int): Boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Setext underline detection (for lazy continuation fixup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` if [content] is a setext heading underline.
+ */
+private fun isSetextUnderlineLi(content: String): Boolean {
+    var i = 0
+    var spaces = 0
+    while (spaces < 3 && i < content.length && content[i] == ' ') { spaces++; i++ }
+    if (i >= content.length) return false
+    val ch = content[i]
+    if (ch != '=' && ch != '-') return false
+    while (i < content.length && content[i] == ch) i++
+    while (i < content.length && (content[i] == ' ' || content[i] == '\t')) i++
+    return i == content.length
+}
+
+// ---------------------------------------------------------------------------
 // Item line collection
 // ---------------------------------------------------------------------------
 
@@ -190,6 +210,8 @@ private data class CollectedLines(
     val nextIdx: Int,
     /** `true` if at least one blank line was absorbed (appeared between continuation lines). */
     val hadInternalBlank: Boolean,
+    /** For each line, whether it was a lazy continuation (< W indent). */
+    val isLazy: List<Boolean> = emptyList(),
 )
 
 /**
@@ -202,20 +224,28 @@ private data class CollectedLines(
  * Blank lines are absorbed (included in the item) only when followed by a sufficiently
  * indented continuation line; otherwise they are left unconsumed.
  */
+private data class CollectedLineInfo(
+    val content: String,
+    val isLazy: Boolean,
+)
+
 private fun collectItemLines(
     chars: List<Char>,
     firstContent: String,
     afterFirstLine: Int,
     W: Int,
 ): CollectedLines {
-    val lines = mutableListOf<String>()
+    val lines = mutableListOf<CollectedLineInfo>()
     val firstIsBlank = firstContent.isEmpty() || isBlankLi(firstContent)
-    if (firstContent.isNotEmpty()) lines.add(firstContent)
+    if (firstContent.isNotEmpty()) lines.add(CollectedLineInfo(firstContent, false))
 
     var idx = afterFirstLine
     var commitIdx = afterFirstLine
     var pendingBlanks = 0
     var hadBlank = false
+    // Track whether the inner content's last block is a paragraph,
+    // which allows lazy continuation of subsequent under-indented lines.
+    var inParagraph = !firstIsBlank
 
     while (idx < chars.size) {
         val (lineContent, nextIdx) = readRawLineLi(chars, idx)
@@ -225,23 +255,49 @@ private fun collectItemLines(
                 // terminates the item immediately (no continuation allowed).
                 if (firstIsBlank) break
                 pendingBlanks++
+                inParagraph = false  // blank line ends paragraph context
                 idx = nextIdx
             }
             countLeadingSpacesLi(lineContent) >= W -> {
                 if (pendingBlanks > 0) {
                     hadBlank = true
-                    repeat(pendingBlanks) { lines.add("") }
+                    repeat(pendingBlanks) { lines.add(CollectedLineInfo("", false)) }
                     pendingBlanks = 0
                 }
-                lines.add(stripLeadingSpacesLi(lineContent, W))
+                val stripped = stripLeadingSpacesLi(lineContent, W)
+                lines.add(CollectedLineInfo(stripped, false))
+                // After blank + normal continuation, the new line might start a
+                // new block or continue a paragraph — conservatively assume paragraph.
+                inParagraph = !isBlankLi(stripped)
                 idx = nextIdx
                 commitIdx = nextIdx
             }
-            else -> break
+            else -> {
+                // Line has fewer than W leading spaces.
+                // Lazy continuation: per §5.2, if the inner content has an open
+                // paragraph, a non-blank continuation line that doesn't interrupt
+                // a paragraph at the outer level can be lazily included.
+                if (pendingBlanks > 0) break  // blank + lazy = paragraph ended
+                if (!inParagraph) break
+                if (canInterruptParagraph(chars, idx)) break
+                // If this line could start a new list item at the outer level,
+                // it's not a lazy continuation — it's a new item.
+                if (detectMarker(chars, idx) != null) break
+                // Include as lazy continuation — strip up to W spaces.
+                val stripped = stripLeadingSpacesLi(lineContent, W)
+                lines.add(CollectedLineInfo(stripped, true))
+                idx = nextIdx
+                commitIdx = nextIdx
+            }
         }
     }
 
-    return CollectedLines(lines, commitIdx, hadBlank)
+    return CollectedLines(
+        lines.map { it.content },
+        commitIdx,
+        hadBlank,
+        lines.map { it.isLazy },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -265,14 +321,75 @@ private fun <U : Any> tryParseItem(
     val (firstContent, afterFirstLine) = readRawLineLi(chars, marker.contentStartIdx)
     val collected = collectItemLines(chars, firstContent, afterFirstLine, marker.W)
 
-    val innerText = collected.lines.joinToString("\n") + "\n"
-    val innerChars = innerText.toList()
-    val innerInput = ParserInput(innerChars, 0, input.userContext)
-    val pBlock = blockFactory()
-    val blocksResult = pMany(pBlock)(innerInput) as Success
-    val blocks: List<Block> = blocksResult.value
+    val hasLazyLines = collected.isLazy.any { it }
 
-    return ItemResult(marker, Block.ListItem(blocks), collected.hadInternalBlank, collected.nextIdx)
+    val pBlock = blockFactory()
+    val blocks: List<Block>
+
+    if (hasLazyLines) {
+        // Split lines into groups of normal (non-lazy) segments, separated by
+        // lazy continuation lines. Normal segments are parsed through the block
+        // parser; lazy lines extend the preceding paragraph's text.
+        val parsedBlocks = mutableListOf<Block>()
+        var i = 0
+        while (i < collected.lines.size) {
+            // Collect a run of normal lines.
+            val normalStart = i
+            while (i < collected.lines.size && !collected.isLazy[i]) i++
+            if (i > normalStart) {
+                val segmentText = collected.lines.subList(normalStart, i)
+                    .joinToString("\n") + "\n"
+                val segChars = segmentText.toList()
+                val segInput = ParserInput(segChars, 0, input.userContext)
+                val segResult = pMany(pBlock)(segInput) as Success
+                parsedBlocks.addAll(segResult.value)
+            }
+            // Collect a run of lazy lines and extend the last paragraph.
+            if (i < collected.lines.size && collected.isLazy[i]) {
+                val lazyLines = mutableListOf<String>()
+                while (i < collected.lines.size && collected.isLazy[i]) {
+                    lazyLines.add(collected.lines[i])
+                    i++
+                }
+                // Extend the last paragraph with lazy lines.
+                val lastIdx = parsedBlocks.indexOfLast { it is Block.Paragraph }
+                if (lastIdx >= 0) {
+                    val para = parsedBlocks[lastIdx] as Block.Paragraph
+                    val existingText = para.inlines.filterIsInstance<Inline.Text>()
+                        .joinToString("") { it.literal }
+                    val extended = (existingText + "\n" + lazyLines.joinToString("\n")).trimEnd()
+                    parsedBlocks[lastIdx] = Block.Paragraph(listOf(Inline.Text(extended)))
+                }
+            }
+        }
+        blocks = parsedBlocks
+    } else {
+        val innerText = collected.lines.joinToString("\n") + "\n"
+        val innerChars = innerText.toList()
+        val innerInput = ParserInput(innerChars, 0, input.userContext)
+        val blocksResult = pMany(pBlock)(innerInput) as Success
+        blocks = blocksResult.value
+    }
+
+    // Determine looseness from parsed blocks: a blank line between non-blank
+    // blocks at the top level means the item has internal blanks. Blank lines
+    // inside fenced code blocks or nested sublists are absorbed by those parsers
+    // and do NOT appear as top-level BlankLine nodes.
+    val hasInternalBlank = run {
+        var seenContent = false
+        var seenBlankAfterContent = false
+        for (b in blocks) {
+            if (b is Block.BlankLine) {
+                if (seenContent) seenBlankAfterContent = true
+            } else {
+                if (seenBlankAfterContent) return@run true
+                seenContent = true
+            }
+        }
+        false
+    }
+
+    return ItemResult(marker, Block.ListItem(blocks), hasInternalBlank, collected.nextIdx)
 }
 
 // ---------------------------------------------------------------------------

@@ -220,12 +220,15 @@ private fun tryCloseTag(chars: List<Char>, start: Int): Int? {
  * HTML comment: `<!--content-->` where content:
  * - does not start with `>` or `->`
  * - ends at the first `-->`
+ *
+ * Degenerate forms `<!-->`  and `<!--->` are valid (empty comments per HTML5).
  */
 private fun tryHtmlComment(chars: List<Char>, start: Int): Int? {
     if (!matchStr(chars, start, "<!--")) return null
     var i = start + 4
-    if (i < chars.size && chars[i] == '>') return null
-    if (i + 1 < chars.size && chars[i] == '-' && chars[i + 1] == '>') return null
+    // Degenerate forms: <!--> and <!--->
+    if (i < chars.size && chars[i] == '>') return i + 1
+    if (i + 1 < chars.size && chars[i] == '-' && chars[i + 1] == '>') return i + 2
     while (i + 2 < chars.size) {
         if (chars[i] == '-' && chars[i + 1] == '-' && chars[i + 2] == '>') {
             return i + 3

@@ -226,36 +226,43 @@ fun <U : Any> pLink(
             }
 
             // 2. Full reference: [text][label]
+            // 3. Collapsed reference: [text][]
+            // Per spec §6.6: if `]` is followed by `[`, we MUST try full/collapsed
+            // reference. If these fail, we do NOT fall back to shortcut — the
+            // presence of `[` after `]` prevents shortcut interpretation.
             if (idx < chars.size && chars[idx] == '[') {
-                parseLinkLabel(chars, idx)?.let { (rawLabel, afterLabel) ->
-                    val label = normalizeLinkLabel(rawLabel)
-                    if (label.isNotBlank()) {
-                        resolveRef(label)?.let { (dest, title) ->
+                // Try collapsed first: [text][]
+                if (idx + 1 < chars.size && chars[idx + 1] == ']') {
+                    val collLabel = normalizeLinkLabel(linkTextChars.joinToString(""))
+                    if (collLabel.isNotBlank()) {
+                        resolveRef(collLabel)?.let { (dest, title) ->
                             children?.let { c ->
                                 return@Parser Success(
-                                    Inline.Link(dest, title, c), afterLabel, input,
+                                    Inline.Link(dest, title, c), idx + 2, input,
                                 )
                             }
                         }
                     }
-                }
-            }
-
-            // 3. Collapsed reference: [text][]
-            if (idx + 1 < chars.size && chars[idx] == '[' && chars[idx + 1] == ']') {
-                val label = normalizeLinkLabel(linkTextChars.joinToString(""))
-                if (label.isNotBlank()) {
-                    resolveRef(label)?.let { (dest, title) ->
-                        children?.let { c ->
-                            return@Parser Success(
-                                Inline.Link(dest, title, c), idx + 2, input,
-                            )
+                } else {
+                    // Try full reference: [text][label]
+                    parseLinkLabel(chars, idx)?.let { (rawLabel, afterLabel) ->
+                        val fullLabel = normalizeLinkLabel(rawLabel)
+                        if (fullLabel.isNotBlank()) {
+                            resolveRef(fullLabel)?.let { (dest, title) ->
+                                children?.let { c ->
+                                    return@Parser Success(
+                                        Inline.Link(dest, title, c), afterLabel, input,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+                // `[` followed `]` but neither full nor collapsed resolved — no shortcut fallback.
+                return@Parser Failure("link", start, input)
             }
 
-            // 4. Shortcut reference: [text]
+            // 4. Shortcut reference: [text] (only when NOT followed by `[`)
             val label = normalizeLinkLabel(linkTextChars.joinToString(""))
             if (label.isNotBlank()) {
                 resolveRef(label)?.let { (dest, title) ->
@@ -329,34 +336,36 @@ fun <U : Any> pImage(
             }
 
             // 2. Full reference: ![alt][label]
+            // 3. Collapsed reference: ![alt][]
+            // Same rule as links: `[` after `]` prevents shortcut fallback.
             if (idx < chars.size && chars[idx] == '[') {
-                parseLinkLabel(chars, idx)?.let { (rawLabel, afterLabel) ->
-                    val label = normalizeLinkLabel(rawLabel)
-                    if (label.isNotBlank()) {
-                        resolveRef(label)?.let { (dest, title) ->
+                if (idx + 1 < chars.size && chars[idx + 1] == ']') {
+                    val collLabel = normalizeLinkLabel(altText)
+                    if (collLabel.isNotBlank()) {
+                        resolveRef(collLabel)?.let { (dest, title) ->
                             val children = contentParser(altChars, input.userContext)
                             return@Parser Success(
-                                Inline.Image(dest, title, altText, children), afterLabel, input,
+                                Inline.Image(dest, title, altText, children), idx + 2, input,
                             )
                         }
                     }
-                }
-            }
-
-            // 3. Collapsed reference: ![alt][]
-            if (idx + 1 < chars.size && chars[idx] == '[' && chars[idx + 1] == ']') {
-                val label = normalizeLinkLabel(altText)
-                if (label.isNotBlank()) {
-                    resolveRef(label)?.let { (dest, title) ->
-                        val children = contentParser(altChars, input.userContext)
-                        return@Parser Success(
-                            Inline.Image(dest, title, altText, children), idx + 2, input,
-                        )
+                } else {
+                    parseLinkLabel(chars, idx)?.let { (rawLabel, afterLabel) ->
+                        val fullLabel = normalizeLinkLabel(rawLabel)
+                        if (fullLabel.isNotBlank()) {
+                            resolveRef(fullLabel)?.let { (dest, title) ->
+                                val children = contentParser(altChars, input.userContext)
+                                return@Parser Success(
+                                    Inline.Image(dest, title, altText, children), afterLabel, input,
+                                )
+                            }
+                        }
                     }
                 }
+                return@Parser Failure("image", start, input)
             }
 
-            // 4. Shortcut reference: ![alt]
+            // 4. Shortcut reference: ![alt] (only when NOT followed by `[`)
             val label = normalizeLinkLabel(altText)
             if (label.isNotBlank()) {
                 resolveRef(label)?.let { (dest, title) ->
