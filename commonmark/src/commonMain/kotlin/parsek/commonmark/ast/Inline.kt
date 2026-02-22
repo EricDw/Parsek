@@ -42,6 +42,7 @@ sealed interface Inline {
         val destination: String,
         val title: String?,
         val alt: String,
+        val children: List<Inline> = emptyList(),
     ) : Inline
 
     /** A URI or email address enclosed in angle brackets. */

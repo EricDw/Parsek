@@ -52,7 +52,11 @@ fun <U : Any> pAutolink(): Parser<Char, Inline, U> =
 private fun tryUriAutolink(chars: List<Char>, start: Int): Pair<String, Int>? {
     var i = start + 1  // skip '<'
     val schemeStart = i
-    while (i < chars.size && chars[i].isLetter()) i++
+    // First char must be a letter
+    if (i >= chars.size || !chars[i].isLetter()) return null
+    i++
+    // Subsequent chars: letters, digits, +, -, .
+    while (i < chars.size && (chars[i].isLetterOrDigit() || chars[i] == '+' || chars[i] == '-' || chars[i] == '.')) i++
     val schemeLen = i - schemeStart
     if (schemeLen < 2 || schemeLen > 32) return null
     if (i >= chars.size || chars[i] != ':') return null
@@ -215,22 +219,16 @@ private fun tryCloseTag(chars: List<Char>, start: Int): Int? {
 /**
  * HTML comment: `<!--content-->` where content:
  * - does not start with `>` or `->`
- * - does not contain `--`
- * - does not end with `-`
+ * - ends at the first `-->`
  */
 private fun tryHtmlComment(chars: List<Char>, start: Int): Int? {
     if (!matchStr(chars, start, "<!--")) return null
     var i = start + 4
     if (i < chars.size && chars[i] == '>') return null
     if (i + 1 < chars.size && chars[i] == '-' && chars[i + 1] == '>') return null
-    while (i < chars.size) {
-        if (chars[i] == '-' && i + 1 < chars.size && chars[i + 1] == '-') {
-            if (i + 2 < chars.size && chars[i + 2] == '>') {
-                // Content must not end with '-'
-                if (i > start + 4 && chars[i - 1] == '-') return null
-                return i + 3
-            }
-            return null  // '--' in content not followed by '>'
+    while (i + 2 < chars.size) {
+        if (chars[i] == '-' && chars[i + 1] == '-' && chars[i + 2] == '>') {
+            return i + 3
         }
         i++
     }

@@ -185,14 +185,22 @@ class PCodeSpanTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun failureNoClosingBacktick() {
-        assertIs<Failure<Char, Unit>>(parse("`foo"))
+    fun unmatchedBacktickEmitsLiteralText() {
+        // When no matching closing backtick run is found, the opening backtick
+        // run is emitted as literal text to prevent sub-run matching.
+        val result = parse("`foo")
+        assertIs<Success<Char, Inline, Unit>>(result)
+        assertEquals(Inline.Text("`"), result.value)
+        assertEquals(1, result.nextIndex)
     }
 
     @Test
-    fun failureWrongLengthClose() {
-        // Opening is ``, closing is ` (wrong length).
-        assertIs<Failure<Char, Unit>>(parse("``foo`"))
+    fun unmatchedWrongLengthEmitsLiteralText() {
+        // Opening is ``, closing is ` (wrong length) — emits `` as literal text.
+        val result = parse("``foo`")
+        assertIs<Success<Char, Inline, Unit>>(result)
+        assertEquals(Inline.Text("``"), result.value)
+        assertEquals(2, result.nextIndex)
     }
 
     @Test

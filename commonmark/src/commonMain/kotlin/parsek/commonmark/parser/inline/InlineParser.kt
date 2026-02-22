@@ -113,7 +113,7 @@ private fun <U : Any> pInlineToken(
         pMap(pAutolink<U>()) { EmphasisToken.Content(it) },
         pMap(pRawHtml<U>()) { EmphasisToken.Content(it) },
         pMap(pLineBreak<U>()) { EmphasisToken.Content(it) },
-        pMap(pImage<U>(resolveRef)) { EmphasisToken.Content(it) },
+        pMap(pImage<U>(contentParser, resolveRef)) { EmphasisToken.Content(it) },
         pMap(pLink<U>(contentParser, resolveRef)) { EmphasisToken.Content(it) },
         pDelimiterRun(),
         pMap(pText<U>()) { EmphasisToken.Content(it) },

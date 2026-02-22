@@ -57,7 +57,10 @@ fun <U : Any> pCodeSpan(): Parser<Char, Inline, U> =
                 }
             }
 
-            Failure("code span", input.index, input)
+            // No matching closing run found: emit the opening backtick run as
+            // literal text so that subsequent parsers don't try sub-runs.
+            val literal = "`".repeat(n)
+            Success(Inline.Text(literal), openStart + n, input)
         },
         "code span",
     )

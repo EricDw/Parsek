@@ -231,7 +231,7 @@ class PInlinesTest {
     fun inlineImage() {
         val result = parse("![alt](/img.png)")
         assertEquals(
-            listOf(Inline.Image("/img.png", null, "alt")),
+            listOf(Inline.Image("/img.png", null, "alt", listOf(Inline.Text("alt")))),
             result,
         )
     }

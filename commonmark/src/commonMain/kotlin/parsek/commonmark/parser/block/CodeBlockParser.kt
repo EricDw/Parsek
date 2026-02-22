@@ -94,6 +94,12 @@ fun <U : Any> pIndentedCodeBlock(): Parser<Char, Block.IndentedCodeBlock, U> =
 
             if (lines.isEmpty()) return@Parser Failure("indented code block", input.index, input)
 
+            // Strip leading and trailing blank lines (§4.4)
+            while (lines.isNotEmpty() && lines.first().isEmpty()) lines.removeFirst()
+            while (lines.isNotEmpty() && lines.last().isEmpty()) lines.removeLast()
+
+            if (lines.isEmpty()) return@Parser Failure("indented code block", input.index, input)
+
             val literal = lines.joinToString("\n") + "\n"
             Success(Block.IndentedCodeBlock(literal), committed, input)
         },

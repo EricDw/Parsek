@@ -32,12 +32,61 @@ private fun findClosingBracket(chars: List<Char>, start: Int): Int? {
     while (i < chars.size) {
         when {
             chars[i] == '\\' && i + 1 < chars.size -> i += 2
+            chars[i] == '`' -> {
+                // Skip code span: count backtick run length and find matching closing run
+                val tickStart = i
+                while (i < chars.size && chars[i] == '`') i++
+                val tickLen = i - tickStart
+                // Find matching closing backtick run
+                var found = false
+                while (i < chars.size) {
+                    if (chars[i] == '`') {
+                        val closeStart = i
+                        while (i < chars.size && chars[i] == '`') i++
+                        if (i - closeStart == tickLen) { found = true; break }
+                    } else {
+                        i++
+                    }
+                }
+                if (!found) {
+                    // No matching closing backticks; backticks are literal
+                    i = tickStart + tickLen
+                }
+            }
+            chars[i] == '<' -> {
+                // Skip <...> constructs (autolinks, raw HTML) that might contain ]
+                val angleEnd = skipAngleBracketContent(chars, i)
+                if (angleEnd != null) {
+                    i = angleEnd
+                } else {
+                    i++
+                }
+            }
             chars[i] == '[' -> { depth++; i++ }
             chars[i] == ']' -> {
                 depth--
                 if (depth == 0) return i
                 i++
             }
+            else -> i++
+        }
+    }
+    return null
+}
+
+/**
+ * Skips an angle-bracket construct `<...>` starting at [start].
+ * Matches autolinks and raw HTML tags. Returns the index after `>`, or null.
+ */
+private fun skipAngleBracketContent(chars: List<Char>, start: Int): Int? {
+    if (start >= chars.size || chars[start] != '<') return null
+    var i = start + 1
+    // Simple scan: find the closing '>' without line breaks
+    while (i < chars.size) {
+        when (chars[i]) {
+            '>' -> return i + 1
+            '\n', '\r' -> return null  // no line breaks in angle constructs
+            '<' -> return null  // nested < not allowed
             else -> i++
         }
     }
@@ -101,6 +150,21 @@ private fun skipLinkWhitespace(chars: List<Char>, startIdx: Int): Int {
     return i
 }
 
+/**
+ * Returns `true` if any inline in the list (recursively) is a [Inline.Link].
+ * Used to enforce the spec rule that links cannot contain other links.
+ */
+private fun containsLink(inlines: List<Inline>): Boolean =
+    inlines.any { inline ->
+        when (inline) {
+            is Inline.Link -> true
+            is Inline.Emphasis -> containsLink(inline.children)
+            is Inline.StrongEmphasis -> containsLink(inline.children)
+            is Inline.Image -> containsLink(inline.children)
+            else -> false
+        }
+    }
+
 // ---------------------------------------------------------------------------
 // pLink
 // ---------------------------------------------------------------------------
@@ -147,10 +211,18 @@ fun <U : Any> pLink(
             val linkTextChars = chars.subList(start + 1, closeBracket)
             val idx = closeBracket + 1
 
+            // Parse link text children once (used by all forms).
+            // If children contain a link, the outer link must fail (§6.6).
+            val children by lazy {
+                val c = contentParser(linkTextChars, input.userContext)
+                if (containsLink(c)) null else c
+            }
+
             // 1. Inline link: [text](dest "title")
             tryInlineLinkSuffix(chars, idx)?.let { (dest, title, nextIdx) ->
-                val children = contentParser(linkTextChars, input.userContext)
-                return@Parser Success(Inline.Link(dest, title, children), nextIdx, input)
+                children?.let { c ->
+                    return@Parser Success(Inline.Link(dest, title, c), nextIdx, input)
+                }
             }
 
             // 2. Full reference: [text][label]
@@ -159,10 +231,11 @@ fun <U : Any> pLink(
                     val label = normalizeLinkLabel(rawLabel)
                     if (label.isNotBlank()) {
                         resolveRef(label)?.let { (dest, title) ->
-                            val children = contentParser(linkTextChars, input.userContext)
-                            return@Parser Success(
-                                Inline.Link(dest, title, children), afterLabel, input,
-                            )
+                            children?.let { c ->
+                                return@Parser Success(
+                                    Inline.Link(dest, title, c), afterLabel, input,
+                                )
+                            }
                         }
                     }
                 }
@@ -173,10 +246,11 @@ fun <U : Any> pLink(
                 val label = normalizeLinkLabel(linkTextChars.joinToString(""))
                 if (label.isNotBlank()) {
                     resolveRef(label)?.let { (dest, title) ->
-                        val children = contentParser(linkTextChars, input.userContext)
-                        return@Parser Success(
-                            Inline.Link(dest, title, children), idx + 2, input,
-                        )
+                        children?.let { c ->
+                            return@Parser Success(
+                                Inline.Link(dest, title, c), idx + 2, input,
+                            )
+                        }
                     }
                 }
             }
@@ -185,10 +259,11 @@ fun <U : Any> pLink(
             val label = normalizeLinkLabel(linkTextChars.joinToString(""))
             if (label.isNotBlank()) {
                 resolveRef(label)?.let { (dest, title) ->
-                    val children = contentParser(linkTextChars, input.userContext)
-                    return@Parser Success(
-                        Inline.Link(dest, title, children), idx, input,
-                    )
+                    children?.let { c ->
+                        return@Parser Success(
+                            Inline.Link(dest, title, c), idx, input,
+                        )
+                    }
                 }
             }
 
@@ -205,8 +280,9 @@ fun <U : Any> pLink(
  * Parses a CommonMark image (§6.9).
  *
  * The syntax is identical to a link, but starts with `![` instead of `[`.
- * The content between `![` and `]` provides the alt text (rendered as plain
- * text, not as inline nodes).
+ * The content between `![` and `]` is parsed as inline content to produce
+ * [Inline.Image.children]; the alt text is derived from flattening those
+ * children to plain text in the renderer.
  *
  * Four syntactic forms are recognised (tried in order):
  *
@@ -215,6 +291,8 @@ fun <U : Any> pLink(
  * 3. **Collapsed reference**: `![alt][]`
  * 4. **Shortcut reference**: `![alt]`
  *
+ * @param contentParser a function that parses a list of characters into a
+ *   list of inline nodes. This enables recursive inline parsing of alt text.
  * @param resolveRef a function that resolves a normalised link label to
  *   `(destination, title?)`, or returns `null` if the label is undefined.
  *   Defaults to always returning `null` (no reference resolution).
@@ -222,6 +300,7 @@ fun <U : Any> pLink(
  * @return a [Parser] that succeeds with [Inline.Image], or fails.
  */
 fun <U : Any> pImage(
+    contentParser: (chars: List<Char>, userContext: U) -> List<Inline> = { _, _ -> emptyList() },
     resolveRef: LinkRefResolver = { null },
 ): Parser<Char, Inline, U> =
     pLabel(
@@ -237,12 +316,16 @@ fun <U : Any> pImage(
             val closeBracket = findClosingBracket(chars, start + 2)
                 ?: return@Parser Failure("image", start, input)
 
-            val altText = chars.subList(start + 2, closeBracket).joinToString("")
+            val altChars = chars.subList(start + 2, closeBracket)
+            val altText = altChars.joinToString("")
             val idx = closeBracket + 1
 
             // 1. Inline image: ![alt](dest "title")
             tryInlineLinkSuffix(chars, idx)?.let { (dest, title, nextIdx) ->
-                return@Parser Success(Inline.Image(dest, title, altText), nextIdx, input)
+                val children = contentParser(altChars, input.userContext)
+                return@Parser Success(
+                    Inline.Image(dest, title, altText, children), nextIdx, input,
+                )
             }
 
             // 2. Full reference: ![alt][label]
@@ -251,8 +334,9 @@ fun <U : Any> pImage(
                     val label = normalizeLinkLabel(rawLabel)
                     if (label.isNotBlank()) {
                         resolveRef(label)?.let { (dest, title) ->
+                            val children = contentParser(altChars, input.userContext)
                             return@Parser Success(
-                                Inline.Image(dest, title, altText), afterLabel, input,
+                                Inline.Image(dest, title, altText, children), afterLabel, input,
                             )
                         }
                     }
@@ -264,8 +348,9 @@ fun <U : Any> pImage(
                 val label = normalizeLinkLabel(altText)
                 if (label.isNotBlank()) {
                     resolveRef(label)?.let { (dest, title) ->
+                        val children = contentParser(altChars, input.userContext)
                         return@Parser Success(
-                            Inline.Image(dest, title, altText), idx + 2, input,
+                            Inline.Image(dest, title, altText, children), idx + 2, input,
                         )
                     }
                 }
@@ -275,8 +360,9 @@ fun <U : Any> pImage(
             val label = normalizeLinkLabel(altText)
             if (label.isNotBlank()) {
                 resolveRef(label)?.let { (dest, title) ->
+                    val children = contentParser(altChars, input.userContext)
                     return@Parser Success(
-                        Inline.Image(dest, title, altText), idx, input,
+                        Inline.Image(dest, title, altText, children), idx, input,
                     )
                 }
             }

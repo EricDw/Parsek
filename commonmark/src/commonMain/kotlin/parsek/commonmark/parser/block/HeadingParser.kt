@@ -101,16 +101,20 @@ fun <U : Any> pAtxHeading(): Parser<Char, Block.Heading, U> =
  * **not** treated as a closing sequence because there is no preceding space.
  */
 private fun normalizeAtxContent(raw: String): String {
-    var s = raw.trimStart(' ', '\t')
-    s = s.trimEnd(' ', '\t')
+    var s = raw.trimEnd(' ', '\t')
     if (s.endsWith('#')) {
         // Find the start index of the trailing '#' run.
         val hashRunStart = s.indexOfLast { it != '#' } + 1
-        // Only strip if preceded by a space or tab (hashRunStart > 0 ensures it is not
-        // at the beginning of the content, which would mean no preceding space exists).
+        // Strip the '#' run if preceded by a space/tab, or if the entire content
+        // (after trimEnd) is only '#' chars and the original had leading whitespace
+        // (meaning the space between opening `#`s and closing `#`s was trimmed).
         if (hashRunStart > 0 && (s[hashRunStart - 1] == ' ' || s[hashRunStart - 1] == '\t')) {
             s = s.substring(0, hashRunStart).trimEnd(' ', '\t')
+        } else if (hashRunStart == 0 && raw.startsWith(" ") || raw.startsWith("\t")) {
+            // Entire trimmed content is '#' chars and there was leading whitespace
+            s = ""
         }
     }
+    s = s.trimStart(' ', '\t')
     return s
 }

@@ -121,14 +121,20 @@ class PRawHtmlTest {
     }
 
     @Test
-    fun failureCommentContainsDoubleHyphen() {
-        assertIs<Failure<Char, Unit>>(parse("<!-- foo--bar -->"))
+    fun commentContainsDoubleHyphen() {
+        // Relaxed per spec examples: '--' inside comments is allowed, comment
+        // ends at the first '-->'.
+        val result = parse("<!-- foo--bar -->")
+        assertIs<Success<Char, Inline, Unit>>(result)
+        assertEquals(Inline.RawHtml("<!-- foo--bar -->"), result.value)
     }
 
     @Test
-    fun failureCommentContentEndsWithHyphen() {
-        // "<!--foo--->" — content "foo-" ends with '-', caught by the no-'--' rule
-        assertIs<Failure<Char, Unit>>(parse("<!--foo--->"))
+    fun commentContentEndsWithTripleHyphen() {
+        // "<!--foo--->" — the comment ends at the first '-->', content is "foo-"
+        val result = parse("<!--foo--->")
+        assertIs<Success<Char, Inline, Unit>>(result)
+        assertEquals(Inline.RawHtml("<!--foo--->"), result.value)
     }
 
     // -------------------------------------------------------------------------

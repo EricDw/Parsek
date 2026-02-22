@@ -120,11 +120,11 @@ class PAtxHeadingTest {
     }
 
     @Test
-    fun contentStartingWithHashIsNotStripped() {
-        // "# ##" — the '##' at the start of content has no preceding space.
+    fun contentStartingWithHashIsClosingSequence() {
+        // "# ##" — the '##' is preceded by a space, so it's a closing '#' run → empty heading.
         val result = parse("# ##")
         assertIs<Success<Char, Block.Heading, Unit>>(result)
-        assertEquals(listOf(Inline.Text("##")), result.value.inlines)
+        assertEquals(emptyList(), result.value.inlines)
     }
 
     // -------------------------------------------------------------------------
@@ -156,13 +156,12 @@ class PAtxHeadingTest {
     }
 
     @Test
-    fun contentHashesNotStrippedWhenNoPrecedingSpaceInContent() {
-        // "# ###" — the '###' is the entire content after the mandatory separator
-        // space; there is no space *within* the content before the hash run, so it
-        // is not treated as a closing sequence.  Spec analogous to "# #" → <h1>#</h1>.
+    fun contentAllHashesIsClosingSequence() {
+        // "# ###" — the '###' is preceded by a space (the mandatory separator),
+        // so it's a closing '#' run → empty heading. Per spec example 79.
         val result = parse("# ###")
         assertIs<Success<Char, Block.Heading, Unit>>(result)
-        assertEquals(listOf(Inline.Text("###")), result.value.inlines)
+        assertEquals(emptyList(), result.value.inlines)
     }
 
     // -------------------------------------------------------------------------

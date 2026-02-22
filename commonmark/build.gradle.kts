@@ -8,7 +8,11 @@ plugins {
 repositories { mavenCentral() }
 
 kotlin {
-    jvm()
+    jvm {
+        testRuns["test"].executionTask.configure {
+            testLogging.showStandardStreams = true
+        }
+    }
     js { browser(); nodejs() }
     linuxX64(); macosX64(); macosArm64(); mingwX64()
     @OptIn(ExperimentalWasmDsl::class) wasmJs { nodejs() }

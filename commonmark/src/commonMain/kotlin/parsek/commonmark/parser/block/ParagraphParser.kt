@@ -157,7 +157,8 @@ fun <U : Any> pParagraph(): Parser<Char, Block.Paragraph, U> =
             while (idx < chars.size) {
                 val (lineContent, nextIdx) = readLineContent(chars, idx)
                 if (isBlankLine(lineContent)) break
-                contentLines.add(stripUpTo3Spaces(lineContent))
+                // Strip leading whitespace from each paragraph content line
+                contentLines.add(lineContent.trimStart())
                 idx = nextIdx
             }
 

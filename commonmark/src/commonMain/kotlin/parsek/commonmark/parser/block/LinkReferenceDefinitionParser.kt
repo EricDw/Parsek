@@ -55,7 +55,22 @@ internal fun parseLinkLabel(chars: List<Char>, idx: Int): Pair<String, Int>? {
  * in Phase 5.
  */
 internal fun normalizeLinkLabel(label: String): String =
-    label.lowercase().replace(Regex("\\s+"), " ").trim()
+    unicodeCaseFold(label).replace(Regex("\\s+"), " ").trim()
+
+/**
+ * Approximates Unicode case folding by lowercasing and applying specific
+ * full case fold mappings that [String.lowercase] misses.
+ */
+private fun unicodeCaseFold(s: String): String {
+    val sb = StringBuilder(s.length)
+    for (ch in s) {
+        when (ch) {
+            '\u1E9E' -> sb.append("ss")  // ẞ LATIN CAPITAL LETTER SHARP S
+            else -> sb.append(ch.lowercaseChar())
+        }
+    }
+    return sb.toString()
+}
 
 // ---------------------------------------------------------------------------
 // Destination helpers
@@ -86,7 +101,9 @@ internal fun parseLinkDestination(chars: List<Char>, idx: Int): Pair<String, Int
             when {
                 chars[i] == '\n' || chars[i] == '\r' -> return null  // no line endings
                 chars[i] == '<' -> return null                         // unescaped '<'
-                chars[i] == '\\' && i + 1 < chars.size -> { sb.append(chars[i + 1]); i += 2 }
+                chars[i] == '\\' && i + 1 < chars.size && isAsciiPunctuation(chars[i + 1]) -> {
+                    sb.append(chars[i + 1]); i += 2
+                }
                 else -> { sb.append(chars[i]); i++ }
             }
         }
@@ -99,7 +116,9 @@ internal fun parseLinkDestination(chars: List<Char>, idx: Int): Pair<String, Int
         var depth = 0
         while (i < chars.size) {
             when {
-                chars[i] == '\\' && i + 1 < chars.size -> { sb.append(chars[i + 1]); i += 2 }
+                chars[i] == '\\' && i + 1 < chars.size && isAsciiPunctuation(chars[i + 1]) -> {
+                    sb.append(chars[i + 1]); i += 2
+                }
                 chars[i] == '(' -> { depth++; sb.append(chars[i]); i++ }
                 chars[i] == ')' -> {
                     if (depth == 0) break
@@ -143,7 +162,9 @@ internal fun parseLinkTitle(chars: List<Char>, idx: Int): Pair<String, Int>? {
     while (i < chars.size && chars[i] != close) {
         when {
             open == '(' && chars[i] == '(' -> return null  // unescaped '(' in paren form
-            chars[i] == '\\' && i + 1 < chars.size -> { sb.append(chars[i + 1]); i += 2 }
+            chars[i] == '\\' && i + 1 < chars.size && isAsciiPunctuation(chars[i + 1]) -> {
+                sb.append(chars[i + 1]); i += 2
+            }
             chars[i] == '\n' || chars[i] == '\r' -> {
                 // Consume the line ending, then check for a blank next line.
                 val nlLen = if (chars[i] == '\r' && i + 1 < chars.size && chars[i + 1] == '\n') 2 else 1
@@ -164,6 +185,10 @@ internal fun parseLinkTitle(chars: List<Char>, idx: Int): Pair<String, Int>? {
 // ---------------------------------------------------------------------------
 // Line-ending utility
 // ---------------------------------------------------------------------------
+
+/** Returns `true` if [c] is an ASCII punctuation character per CommonMark §2.4. */
+private fun isAsciiPunctuation(c: Char): Boolean =
+    c in '!'..'/' || c in ':'..'@' || c in '['..'`' || c in '{'..'~'
 
 /** Advances past one line ending (`\n`, `\r\n`, or `\r`) at [idx], or returns [idx]. */
 private fun consumeLineEnding(chars: List<Char>, idx: Int): Int = when {
