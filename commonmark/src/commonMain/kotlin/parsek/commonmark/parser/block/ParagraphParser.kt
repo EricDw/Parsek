@@ -208,7 +208,7 @@ private fun readLineContent(chars: List<Char>, startIdx: Int): Pair<String, Int>
  * - Optional trailing spaces/tabs
  * - Ends at a line ending or EOF
  */
-private fun setextUnderlineLevel(chars: List<Char>, startIdx: Int): Int? {
+internal fun setextUnderlineLevel(chars: List<Char>, startIdx: Int): Int? {
     var i = startIdx
     var spaces = 0
     while (spaces < 3 && i < chars.size && chars[i] == ' ') { spaces++; i++ }

@@ -100,7 +100,7 @@ fun <U : Any> pAtxHeading(): Parser<Char, Block.Heading, U> =
  * A `#` run that starts at the beginning of the (leading-stripped) content is
  * **not** treated as a closing sequence because there is no preceding space.
  */
-private fun normalizeAtxContent(raw: String): String {
+internal fun normalizeAtxContent(raw: String): String {
     var s = raw.trimEnd(' ', '\t')
     if (s.endsWith('#')) {
         // Find the start index of the trailing '#' run.
