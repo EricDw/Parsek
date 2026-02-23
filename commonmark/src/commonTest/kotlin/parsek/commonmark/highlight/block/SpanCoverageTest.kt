@@ -1,16 +1,19 @@
 package parsek.commonmark.highlight.block
 
+import parsek.Failure
 import parsek.Parser
 import parsek.ParserInput
 import parsek.Success
+import parsek.commonmark.ast.Block
 import parsek.commonmark.highlight.Span
 import parsek.commonmark.highlight.SpanSink
+import parsek.commonmark.parser.block.pParagraph
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * Verifies the "weak round-trip" property for every leaf-block highlight wrapper:
+ * Verifies the "weak round-trip" property for every block highlight wrapper:
  *
  * 1. Spans are sorted by start index.
  * 2. Spans do not overlap.
@@ -194,6 +197,59 @@ class SpanCoverageTest {
             // Paragraph emits no spans; invariants still hold trivially.
             assertSpanInvariants(hr)
             assertTrue(hr.spans.isEmpty(), "Paragraph should emit no block spans")
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Block quote
+    // ---------------------------------------------------------------------
+
+    /** A minimal block factory for container block tests. */
+    private val blockFactory: () -> Parser<Char, Block, SpanSink> = {
+        Parser { input ->
+            when (val r = pParagraph<SpanSink>()(input)) {
+                is Success -> Success(r.value as Block, r.nextIndex, r.input)
+                is Failure -> r
+            }
+        }
+    }
+
+    @Test
+    fun blockQuoteCoverage() {
+        for (input in listOf(
+            "> hello\n",
+            "> a\n> b\n",
+            "  > indented\n",
+            ">no space\n",
+        )) {
+            assertSpanInvariants(highlight(pBlockQuoteHighlight(blockFactory), input))
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // List
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun listItemCoverage() {
+        for (input in listOf(
+            "- hello\n",
+            "1. hello\n",
+            " + world\n",
+            "10) item\n",
+        )) {
+            assertSpanInvariants(highlight(pListItemHighlight(blockFactory), input))
+        }
+    }
+
+    @Test
+    fun listCoverage() {
+        for (input in listOf(
+            "- a\n- b\n",
+            "1. a\n2. b\n",
+            "* x\n* y\n* z\n",
+        )) {
+            assertSpanInvariants(highlight(pListHighlight(blockFactory), input))
         }
     }
 }
