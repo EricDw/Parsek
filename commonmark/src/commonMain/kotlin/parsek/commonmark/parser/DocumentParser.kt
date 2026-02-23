@@ -1,26 +1,11 @@
 package parsek.commonmark.parser
 
-import parsek.Parser
-import parsek.Success
+import parsek.*
 import parsek.commonmark.ast.Block
 import parsek.commonmark.ast.Document
 import parsek.commonmark.ast.Inline
-import parsek.commonmark.parser.block.normalizeLinkLabel
-import parsek.commonmark.parser.block.pAtxHeading
-import parsek.commonmark.parser.block.pBlockQuote
-import parsek.commonmark.parser.block.pFencedCodeBlock
-import parsek.commonmark.parser.block.pHtmlBlock
-import parsek.commonmark.parser.block.pIndentedCodeBlock
-import parsek.commonmark.parser.block.pLinkReferenceDefinition
-import parsek.commonmark.parser.block.pList
-import parsek.commonmark.parser.block.pParagraph
-import parsek.commonmark.parser.block.pSetextHeading
-import parsek.commonmark.parser.block.pThematicBreak
+import parsek.commonmark.parser.block.*
 import parsek.commonmark.parser.inline.parseInlineContent
-import parsek.pChoice
-import parsek.pLabel
-import parsek.pMany
-import parsek.pMap
 import parsek.text.pBlankLine
 
 // ---------------------------------------------------------------------------
@@ -124,7 +109,7 @@ fun <U : Any> pDocument(): Parser<Char, Document, U> =
  * First definition for a given normalised label wins (subsequent duplicates
  * are ignored).
  */
-private fun collectLinkRefDefs(
+internal fun collectLinkRefDefs(
     block: Block,
     refMap: MutableMap<String, Pair<String, String?>>,
 ) {
@@ -132,7 +117,7 @@ private fun collectLinkRefDefs(
         is Block.LinkReferenceDefinition -> {
             val label = normalizeLinkLabel(block.label)
             if (label.isNotBlank()) {
-                refMap.putIfAbsent(label, Pair(block.destination, block.title))
+                refMap.getOrPut(label) { Pair(block.destination, block.title) }
             }
         }
         is Block.BlockQuote -> block.blocks.forEach { collectLinkRefDefs(it, refMap) }
@@ -155,7 +140,7 @@ private fun collectLinkRefDefs(
  * Container blocks are walked recursively; leaf blocks other than paragraphs
  * and headings are returned unchanged.
  */
-private fun resolveInlines(
+internal fun resolveInlines(
     block: Block,
     resolveRef: (String) -> Pair<String, String?>?,
 ): Block = when (block) {
@@ -204,7 +189,7 @@ private fun resolveInlines(
  * Returns `null` if the inline list does not contain a simple text stub
  * (i.e. it has already been parsed or is empty).
  */
-private fun extractRawContent(inlines: List<Inline>): String? {
+internal fun extractRawContent(inlines: List<Inline>): String? {
     if (inlines.size == 1) {
         val single = inlines[0]
         if (single is Inline.Text) return single.literal
