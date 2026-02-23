@@ -24,6 +24,6 @@ publishing {
     publications.withType<MavenPublication> {
         groupId = "com.dewildte.parsek"
         artifactId = "parsek-core"
-        version = "0.1.0-SNAPSHOT"
+        version = "0.1.0"
     }
 }
