@@ -1,23 +1,65 @@
 # Parsek
 
-A Kotlin Multiplatform parser combinator library.
+A Kotlin Multiplatform parser combinator library — with a fully spec-compliant
+CommonMark 0.31.2 parser built on top.
 
 ## Modules
 
 | Module | Artifact | Description |
 |---|---|---|
-| `:core` | `com.dewildte.parsek:parsek-core` | Generic combinators (`Parser`, `ParserInput`, `ParseResult`, `satisfy`) |
-| `:text` | `com.dewildte.parsek:parsek-text` | Text/character parsers (`char`); depends on `:core` |
+| `:core` | `com.dewildte.parsek:parsek-core` | Generic `Parser<I, O, U>` type and combinators |
+| `:text` | `com.dewildte.parsek:parsek-text` | Character/string parsers; depends on `:core` |
+| `:commonmark` | `com.dewildte.parsek:parsek-commonmark` | CommonMark 0.31.2 parser (652/652 spec examples passing) |
+| `:compose-renderer` | — | Compose Multiplatform markdown renderer demo (JVM + Android) |
+| `:benchmark` | — | JMH benchmarks and profiling runner (JVM-only) |
 
 ## Overview
 
 Parsek is built around three core types:
 
-- **`ParserInput<I>`** — a position-aware wrapper around any list of tokens
-- **`ParseResult<I, O>`** — a sealed result that is either a `Success` (value + next index) or a `Failure` (message + index)
-- **`Parser<I, O>`** — a functional interface `(ParserInput<I>) -> ParseResult<I, O>`
+- **`ParserInput<I, U>`** — a position-aware, immutable wrapper around any list of tokens, with an optional user-context value of type `U`
+- **`ParseResult<I, O, U>`** — a sealed result: `Success` (value + next index) or `Failure` (message + index)
+- **`Parser<I, O, U>`** — a functional interface `(ParserInput<I, U>) -> ParseResult<I, O, U>`
 
-The input type `I` and output type `O` are independent, so parsers can transform tokens into any type as they consume input.
+The input type `I`, output type `O`, and user-context type `U` are all independent, so parsers can transform tokens into any type while threading arbitrary state through the parse.
+
+## CommonMark
+
+The `:commonmark` module implements the full [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) specification using a **two-pass design**:
+
+1. **Block pass** — parses the input into block-level structure (headings, code blocks, lists, block quotes, etc.) and collects link reference definitions.
+2. **Inline pass** — re-parses inline content within paragraphs and headings, resolving link references against the definitions gathered in pass 1.
+
+### AST
+
+The parser produces a `Document` containing a tree of `Block` and `Inline` nodes:
+
+- **Blocks:** `Heading`, `Paragraph`, `FencedCodeBlock`, `IndentedCodeBlock`, `HtmlBlock`, `BlockQuote`, `BulletList`, `OrderedList`, `ListItem`, `ThematicBreak`, `LinkReferenceDefinition`, `BlankLine`
+- **Inlines:** `Text`, `Emphasis`, `StrongEmphasis`, `CodeSpan`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `HardBreak`, `SoftBreak`
+
+### Syntax highlighting
+
+The `parsek.commonmark.highlight` package provides a `SpanSink` that collects token-level highlight spans during parsing:
+
+```kotlin
+import parsek.*
+import parsek.commonmark.highlight.*
+import parsek.commonmark.parser.pDocument
+
+val markdown = "# Hello **world**"
+val sink = SpanSink()
+val input = ParserInput.of(markdown.toList(), sink)
+
+when (val result = pDocument<SpanSink>()(input)) {
+    is Success -> {
+        val document = result.value      // parsed AST
+        val highlights = sink.spans      // List<Span> with TokenType, start, end
+    }
+    is Failure -> println(result.message)
+}
+```
+
+There are 26 `TokenType` values covering block markers, inline delimiters, content regions, and escapes.
 
 ## Targets
 
@@ -30,6 +72,8 @@ The input type `I` and output type `O` are independent, so parsers can transform
 | Windows | `mingwX64` |
 | WASM | `wasmJs`, `wasmWasi` |
 
+The `:compose-renderer` module targets JVM and Android only. The `:benchmark` module targets JVM only.
+
 ## Usage
 
 ### `pSatisfy` (`:core`)
@@ -39,7 +83,7 @@ Consumes one element from the input if it matches a predicate.
 ```kotlin
 import parsek.*
 
-val isDigit: Parser<Char, Char> = pSatisfy { it.isDigit() }
+val isDigit: Parser<Char, Char, Unit> = pSatisfy { it.isDigit() }
 
 val input = ParserInput.of("123".toList())
 when (val result = isDigit(input)) {
@@ -55,36 +99,54 @@ Matches a specific character.
 ```kotlin
 import parsek.text.pChar
 
-val excl: Parser<Char, Char> = pChar('!')
+val excl: Parser<Char, Char, Unit> = pChar('!')
 ```
 
-### Chaining parsers
+### `pDocument` (`:commonmark`)
 
-`ParserInput` is immutable — each successful parse returns a `nextIndex` you use to construct the next input position:
+Parses a complete CommonMark document.
 
 ```kotlin
-val input = ParserInput.of("42".toList())
-val first = isDigit(input)                                    // Success('4', nextIndex=1, ...)
-val second = isDigit(ParserInput(input.input, first.nextIndex)) // Success('2', nextIndex=2, ...)
+import parsek.*
+import parsek.commonmark.parser.pDocument
+
+val markdown = """
+    # Parsek
+
+    A **parser combinator** library for Kotlin Multiplatform.
+
+    - Composable
+    - Type-safe
+    - Cross-platform
+""".trimIndent()
+
+val input = ParserInput.of(markdown.toList())
+when (val result = pDocument<Unit>()(input)) {
+    is Success -> println(result.value) // Document(blocks=[Heading(...), Paragraph(...), BulletList(...)])
+    is Failure -> println(result.message)
+}
 ```
 
 ## Building
 
 ```bash
+# Full build
 ./gradlew build
-```
 
-### Running tests
-
-```bash
-# Core tests
+# Run tests per module (JVM fast path)
 ./gradlew :core:jvmTest
+./gradlew :text:jvmTest
+./gradlew :commonmark:jvmTest
 
-# All desktop targets
-./gradlew :core:jvmTest :core:macosArm64Test :core:macosX64Test
+# Full multiplatform tests (slower — runs native, JS, WASM)
+./gradlew allTests
 
-# Full multi-module build
-./gradlew build
+# Run JMH benchmarks
+./gradlew :benchmark:jmh
+
+# Run profiling script
+./gradlew :benchmark:run
+
+# Run Compose desktop demo
+./gradlew :compose-renderer:run
 ```
-
-An IntelliJ **Desktop Tests** run configuration is included in the repo.
