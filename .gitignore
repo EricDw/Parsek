@@ -38,3 +38,9 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Local config ###
+local.properties
+
+### Claude Code ###
+.claude/plans/
