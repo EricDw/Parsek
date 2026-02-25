@@ -58,7 +58,7 @@ Low-level character parsers. Most are thin wrappers over `pSatisfy` or `pChar`/`
 
 ## 3. AST Types
 
-The `:commonmark` module owns the AST and all CommonMark-specific parsers.
+The `:markdown` module owns the AST and all CommonMark-specific parsers.
 It depends on `:text` (for character primitives) which in turn depends on `:core`.
 
 ### Document
@@ -355,7 +355,7 @@ pBlock = pOr(
 Three Gradle subprojects with a strict dependency chain:
 
 ```
-:core  ←  :text  ←  :commonmark
+:core  ←  :text  ←  :markdown
 ```
 
 ```
@@ -379,8 +379,8 @@ text/
                             // pTakeWhile1, pRestOfLine,
                             // pIndent, pUpTo3Spaces
 
-commonmark/
-  src/commonMain/kotlin/parsek/commonmark/
+markdown/
+  src/commonMain/kotlin/parsek/markdown/
     ast/
       Block.kt
       Inline.kt
@@ -430,7 +430,7 @@ commonmark/
 - **Tight vs. loose lists** — determined retroactively after all list items
   are parsed by inspecting whether blank lines appear within or between items.
 - **Syntax highlighting** — the highlight infrastructure (`Span`, `TokenType`,
-  `SpanSink`, `pTag`) exists in `parsek.commonmark.highlight` and is intentionally
+  `SpanSink`, `pTag`) exists in `parsek.markdown.highlight` and is intentionally
   **not** a requirement of this plan. Block and inline parsers are kept generic
   over the user-context type `U` so they can run with or without a `SpanSink`.
   A dedicated `pTag` wrapping layer is planned as a follow-on phase once the
@@ -473,7 +473,7 @@ PRs within a phase can be worked in parallel; phases must be completed in order.
 
 ### Phase 2 — CommonMark Module Scaffold + AST
 
-> Module: `:commonmark` (new) — depends on Phase 1
+> Module: `:markdown` (new) — depends on Phase 1
 
 | PR | Contents | Notes |
 |----|----------|-------|
@@ -484,7 +484,7 @@ PRs within a phase can be worked in parallel; phases must be completed in order.
 
 ### Phase 3 — Leaf Block Parsers
 
-> Module: `:commonmark` — depends on Phase 2
+> Module: `:markdown` — depends on Phase 2
 
 Each PR adds one parser file under `parser/block/` plus its tests.
 
@@ -502,7 +502,7 @@ Each PR adds one parser file under `parser/block/` plus its tests.
 
 ### Phase 4 — Container Block Parsers
 
-> Module: `:commonmark` — depends on Phase 3
+> Module: `:markdown` — depends on Phase 3
 
 | PR | Parser | Key complexity |
 |----|--------|---------------|
@@ -513,7 +513,7 @@ Each PR adds one parser file under `parser/block/` plus its tests.
 
 ### Phase 5 — Inline Parsers
 
-> Module: `:commonmark` — depends on Phase 4 (needs `pParagraph` to feed inline content)
+> Module: `:markdown` — depends on Phase 4 (needs `pParagraph` to feed inline content)
 
 | PR | Parser(s) | Key complexity |
 |----|-----------|---------------|
@@ -530,7 +530,7 @@ Each PR adds one parser file under `parser/block/` plus its tests.
 
 ### Phase 6 — Document Parser & Integration
 
-> Module: `:commonmark` — depends on Phase 5
+> Module: `:markdown` — depends on Phase 5
 
 | PR | Contents | Notes |
 |----|----------|-------|

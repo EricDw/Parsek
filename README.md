@@ -1,7 +1,7 @@
 # Parsek
 
-A Kotlin Multiplatform parser combinator library — with a fully spec-compliant
-CommonMark 0.31.2 parser built on top.
+A Kotlin Multiplatform parser combinator library — with a CommonMark 0.31.2
+parser and GitHub Flavoured Markdown (GFM) extensions built on top.
 
 ## Modules
 
@@ -9,8 +9,8 @@ CommonMark 0.31.2 parser built on top.
 |---|---|---|
 | `:core` | `com.dewildte.parsek:parsek-core` | Generic `Parser<I, O, U>` type and combinators |
 | `:text` | `com.dewildte.parsek:parsek-text` | Character/string parsers; depends on `:core` |
-| `:commonmark` | `com.dewildte.parsek:parsek-commonmark` | CommonMark 0.31.2 parser (652/652 spec examples passing) |
-| `:compose-renderer` | — | Compose Multiplatform markdown renderer demo (JVM + Android) |
+| `:markdown` | `com.dewildte.parsek:parsek-markdown` | CommonMark 0.31.2 + GFM extensions parser (96.3% CommonMark, 100% GFM spec compliance) |
+| `:compose-renderer` | — | Compose Multiplatform markdown renderer with GFM support (JVM + Android) |
 | `:benchmark` | — | JMH benchmarks and profiling runner (JVM-only) |
 
 ## Overview
@@ -23,34 +23,43 @@ Parsek is built around three core types:
 
 The input type `I`, output type `O`, and user-context type `U` are all independent, so parsers can transform tokens into any type while threading arbitrary state through the parse.
 
-## CommonMark
+## CommonMark + GFM
 
-The `:commonmark` module implements the full [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) specification using a **two-pass design**:
+The `:markdown` module implements the [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) specification with all five [GitHub Flavoured Markdown](https://github.github.com/gfm/) extensions, using a **two-pass design**:
 
-1. **Block pass** — parses the input into block-level structure (headings, code blocks, lists, block quotes, etc.) and collects link reference definitions.
-2. **Inline pass** — re-parses inline content within paragraphs and headings, resolving link references against the definitions gathered in pass 1.
+1. **Block pass** — parses the input into block-level structure (headings, code blocks, lists, block quotes, tables, etc.) and collects link reference definitions.
+2. **Inline pass** — re-parses inline content within paragraphs, headings, and table cells, resolving link references and applying GFM extensions (strikethrough, extended autolinks, task list markers).
+
+### GFM Extensions
+
+| Extension | Description |
+|-----------|-------------|
+| Tables | Pipe-separated tables with column alignment (`\|---\|:---:\|---:\|`) |
+| Strikethrough | `~~deleted text~~` produces strikethrough formatting |
+| Task list items | `- [x] done` / `- [ ] todo` checkbox markers in list items |
+| Extended autolinks | Bare URLs (`https://...`, `www.…`) and emails auto-linked |
+| Disallowed raw HTML | Filters `<script>`, `<style>`, etc. in rendered output |
 
 ### AST
 
 The parser produces a `Document` containing a tree of `Block` and `Inline` nodes:
 
-- **Blocks:** `Heading`, `Paragraph`, `FencedCodeBlock`, `IndentedCodeBlock`, `HtmlBlock`, `BlockQuote`, `BulletList`, `OrderedList`, `ListItem`, `ThematicBreak`, `LinkReferenceDefinition`, `BlankLine`
-- **Inlines:** `Text`, `Emphasis`, `StrongEmphasis`, `CodeSpan`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `HardBreak`, `SoftBreak`
+- **Blocks:** `Heading`, `Paragraph`, `FencedCodeBlock`, `IndentedCodeBlock`, `HtmlBlock`, `BlockQuote`, `BulletList`, `OrderedList`, `ListItem`, `ThematicBreak`, `LinkReferenceDefinition`, `BlankLine`, `Table`, `TableRow`, `TableCell`
+- **Inlines:** `Text`, `Emphasis`, `StrongEmphasis`, `CodeSpan`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `HardBreak`, `SoftBreak`, `Strikethrough`, `ExtendedAutolink`
 
 ### Syntax highlighting
 
-The `parsek.commonmark.highlight` package provides a `SpanSink` that collects token-level highlight spans during parsing:
+The `parsek.markdown.highlight` package provides a `SpanSink` that collects token-level highlight spans during parsing:
 
 ```kotlin
 import parsek.*
-import parsek.commonmark.highlight.*
-import parsek.commonmark.parser.pDocument
+import parsek.markdown.highlight.*
 
 val markdown = "# Hello **world**"
 val sink = SpanSink()
 val input = ParserInput.of(markdown.toList(), sink)
 
-when (val result = pDocument<SpanSink>()(input)) {
+when (val result = pDocumentHighlight()(input)) {
     is Success -> {
         val document = result.value      // parsed AST
         val highlights = sink.spans      // List<Span> with TokenType, start, end
@@ -59,7 +68,7 @@ when (val result = pDocument<SpanSink>()(input)) {
 }
 ```
 
-There are 26 `TokenType` values covering block markers, inline delimiters, content regions, and escapes.
+There are 30 `TokenType` values covering block markers, inline delimiters, content regions, escapes, and GFM extensions.
 
 ## Targets
 
@@ -102,13 +111,13 @@ import parsek.text.pChar
 val excl: Parser<Char, Char, Unit> = pChar('!')
 ```
 
-### `pDocument` (`:commonmark`)
+### `pDocument` (`:markdown`)
 
 Parses a complete CommonMark document.
 
 ```kotlin
 import parsek.*
-import parsek.commonmark.parser.pDocument
+import parsek.markdown.parser.pDocument
 
 val markdown = """
     # Parsek
@@ -136,7 +145,7 @@ when (val result = pDocument<Unit>()(input)) {
 # Run tests per module (JVM fast path)
 ./gradlew :core:jvmTest
 ./gradlew :text:jvmTest
-./gradlew :commonmark:jvmTest
+./gradlew :markdown:jvmTest
 
 # Full multiplatform tests (slower — runs native, JS, WASM)
 ./gradlew allTests

@@ -2,9 +2,9 @@ package parsek.benchmark
 
 import org.openjdk.jmh.annotations.*
 import parsek.ParserInput
-import parsek.commonmark.highlight.SpanSink
-import parsek.commonmark.parser.pDocument
-import parsek.commonmark.highlight.pDocumentHighlight
+import parsek.markdown.highlight.SpanSink
+import parsek.markdown.parser.pDocument
+import parsek.markdown.highlight.pDocumentHighlight
 import java.util.concurrent.TimeUnit
 
 @State(Scope.Benchmark)

@@ -8,20 +8,27 @@ Parsek is a **Kotlin Multiplatform parser combinator library**. It provides a
 composable `Parser<I, O, U>` type and a growing set of combinators for building
 parsers from small, reusable pieces.
 
-The long-term goal is a fully spec-compliant CommonMark parser built on top of
-the library. See `COMMONMARK_PLAN.md` for the roadmap.
+Built on top of the library is a **CommonMark 0.31.2 parser** with all five
+**GitHub Flavoured Markdown (GFM) extensions** (tables, strikethrough, task list
+items, extended autolinks, disallowed raw HTML), a syntax highlighting system,
+and a Compose Multiplatform renderer.
+
+Spec compliance: 96.3% CommonMark (628/652), 100% GFM extensions (24/24).
+See `COMMONMARK_PLAN.md` and `GFM_PLAN.md` for the roadmaps.
 
 ---
 
 ## Module Structure
 
 ```
-:core        — generic Parser type, combinators, operator extensions
-:text        — character/string parsers built on :core
-:commonmark  — (planned) CommonMark AST + parsers built on :text
+:core              — generic Parser type, combinators, operator extensions
+:text              — character/string parsers built on :core
+:markdown          — CommonMark 0.31.2 + GFM extensions: AST, parsers, highlighting
+:compose-renderer  — Compose Multiplatform markdown renderer with GFM support (JVM + Android)
+:benchmark         — JMH benchmarks and profiling (JVM-only)
 ```
 
-Dependencies: `:core` ← `:text` ← `:commonmark`
+Dependencies: `:core` ← `:text` ← `:markdown` ← `:compose-renderer` / `:benchmark`
 
 ### Key files
 
@@ -33,6 +40,13 @@ Dependencies: `:core` ← `:text` ← `:commonmark`
 | `core/src/commonMain/kotlin/parsek/Parsers.kt` | All core combinators (`pSatisfy`, `pAnd`, `pOr`, …) |
 | `core/src/commonMain/kotlin/parsek/ParserOps.kt` | Operator/infix/extension-property sugar |
 | `text/src/commonMain/kotlin/parsek/text/TextParsers.kt` | `pChar`, `pString`, `pInt` |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Block.kt` | 15 block-level AST types (incl. Table, TableRow, TableCell) |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Inline.kt` | 12 inline-level AST types (incl. Strikethrough, ExtendedAutolink) |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Document.kt` | Root `Document` type |
+| `markdown/src/commonMain/kotlin/parsek/markdown/parser/DocumentParser.kt` | `pDocument` / `pBlock` entry points |
+| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/DocumentHighlight.kt` | `pDocumentHighlight` entry point |
+| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/TokenType.kt` | 30 semantic token types (incl. GFM extensions) |
+| `compose-renderer/src/commonMain/kotlin/parsek/markdown/renderer/MarkdownRenderer.kt` | Compose rendering |
 
 ---
 
@@ -44,12 +58,17 @@ Gradle 8.11 + Kotlin Multiplatform 2.1.0.
 # Run all tests (JVM fast path)
 ./gradlew :core:jvmTest
 ./gradlew :text:jvmTest
+./gradlew :markdown:jvmTest
 
 # Run a specific test class
 ./gradlew :core:jvmTest --tests "parsek.PEofTest"
+./gradlew :markdown:jvmTest --tests "parsek.markdown.SpecTest"
 
 # Full multiplatform test (slower — runs native, JS, wasm)
 ./gradlew allTests
+
+# Run benchmarks
+./gradlew :benchmark:jmh
 ```
 
 ---
@@ -77,6 +96,9 @@ These are the stable, explicit API. Never remove them in favour of operators alo
 | `pLookAhead(p)` | Positive lookahead — match without consuming |
 | `pNot(p)` | Negative lookahead — succeed only if `p` fails |
 | `pLabel(p, msg)` | Replace failure message |
+| `pSepBy(item, sep)` | Zero-or-more items separated by delimiter |
+| `pSepBy1(item, sep)` | One-or-more items separated by delimiter |
+| `pBetween(open, close, inner)` | Parse `inner` wrapped between `open` and `close` |
 
 ### Operator/infix sugar (`ParserOps.kt`)
 
@@ -95,9 +117,38 @@ These desugar to the named functions above. Add new sugar here; keep `Parsers.kt
 | `a.lookAhead` | `pLookAhead(a)` |
 | `a.map { }` | `pMap(a) { }` |
 | `a.bind { }` | `pBind(a) { }` |
+| `a sepBy b` | `pSepBy(a, b)` |
+| `a sepBy1 b` | `pSepBy1(a, b)` |
 
-Operator precedence (high → low): `!` · `*` · `+` · infix (`or`, `label`, …) · extension functions.
+Operator precedence (high → low): `!` · `*` · `+` · infix (`or`, `label`, `sepBy`, …) · extension functions.
 This means sequence (`+`) binds tighter than choice (`or`) without extra parentheses.
+
+---
+
+## Markdown Module
+
+### AST (`parsek.markdown.ast`)
+
+- **`Document(blocks: List<Block>)`** — root node
+- **`Block`** sealed interface — 15 types: `ThematicBreak`, `Heading`, `IndentedCodeBlock`, `FencedCodeBlock`, `HtmlBlock`, `LinkReferenceDefinition`, `Paragraph`, `BlankLine`, `BlockQuote`, `ListItem` (with `checked: Boolean?` for task lists), `BulletList`, `OrderedList`, `Table`, `TableRow`, `TableCell`
+- **`Inline`** sealed interface — 12 types: `Text`, `SoftBreak`, `HardBreak`, `CodeSpan`, `Emphasis`, `StrongEmphasis`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `Strikethrough`, `ExtendedAutolink`
+
+### Parsers (`parsek.markdown.parser`)
+
+Block parsers in `parser/block/`, inline parsers in `parser/inline/`.
+Entry point: `DocumentParser.pDocument()`.
+
+### Syntax Highlighting (`parsek.markdown.highlight`)
+
+The highlight system produces flat `Span` annotations without building an AST:
+
+- **`TokenType`** — 30 sealed types for semantic tokens (headings, code, emphasis, GFM tables/strikethrough/task markers/autolinks, etc.)
+- **`Span(type, start, end)`** — half-open range annotation
+- **`SpanSink`** — mutable accumulator used as the `U` (user context) parameter
+- **`pTag(type, parser)`** — wraps a parser to record a `Span` on success
+- **`pDocumentHighlight()`** — entry point wiring all highlight wrappers
+
+Block highlights in `highlight/block/`, inline highlights in `highlight/inline/`.
 
 ---
 

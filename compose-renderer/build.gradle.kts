@@ -21,7 +21,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core"))
-            implementation(project(":commonmark"))
+            implementation(project(":markdown"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)
@@ -40,11 +40,11 @@ kotlin {
 }
 
 android {
-    namespace = "parsek.commonmark.renderer"
+    namespace = "parsek.markdown.renderer"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "parsek.commonmark.renderer"
+        applicationId = "parsek.markdown.renderer"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -59,6 +59,6 @@ android {
 
 compose.desktop {
     application {
-        mainClass = "parsek.commonmark.renderer.MainKt"
+        mainClass = "parsek.markdown.renderer.MainKt"
     }
 }

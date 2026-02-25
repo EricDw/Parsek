@@ -9,7 +9,7 @@ repositories { mavenCentral() }
 dependencies {
     implementation(project(":core"))
     implementation(project(":text"))
-    implementation(project(":commonmark"))
+    implementation(project(":markdown"))
 }
 
 application {

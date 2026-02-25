@@ -2,9 +2,9 @@ package parsek.benchmark
 
 import parsek.ParserInput
 import parsek.Success
-import parsek.commonmark.highlight.SpanSink
-import parsek.commonmark.parser.pDocument
-import parsek.commonmark.highlight.pDocumentHighlight
+import parsek.markdown.highlight.SpanSink
+import parsek.markdown.parser.pDocument
+import parsek.markdown.highlight.pDocumentHighlight
 
 fun main() {
     println("=== Parsek CommonMark Profiler ===")

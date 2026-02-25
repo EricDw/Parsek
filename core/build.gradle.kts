@@ -23,7 +23,7 @@ kotlin {
 publishing {
     publications.withType<MavenPublication> {
         groupId = "com.dewildte.parsek"
-        artifactId = "parsek-core"
+        artifactId = "parsek-$artifactId"
         version = "0.1.0"
     }
 }

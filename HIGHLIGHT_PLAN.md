@@ -45,7 +45,7 @@ each parser file. They are thin wrappers that compose the generic parser with
 ## Existing Infrastructure
 
 All of the following already exist in
-`commonmark/src/commonMain/kotlin/parsek/commonmark/highlight/`:
+`markdown/src/commonMain/kotlin/parsek/markdown/highlight/`:
 
 | File | Purpose |
 |------|---------|
@@ -95,7 +95,7 @@ matches must not produce spans.
 
 ## Phase 7 — Highlight Wrappers
 
-> Module: `:commonmark` — depends on Phase 6
+> Module: `:markdown` — depends on Phase 6
 
 Each PR adds a `*Highlight.kt` file in a `highlight/` sub-directory next to
 the corresponding parser file. The file exports a single entry-point function
@@ -177,7 +177,7 @@ Each `*Highlight.kt` wrapper has a corresponding `*HighlightTest.kt` that:
    spans).
 
 Use the same test structure as `PTagTest.kt` in
-`commonmark/src/commonTest/kotlin/parsek/commonmark/highlight/`.
+`markdown/src/commonTest/kotlin/parsek/markdown/highlight/`.
 
 ---
 

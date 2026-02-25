@@ -16,7 +16,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":core"))
+            api(project(":core"))
         }
         commonTest.dependencies { implementation(kotlin("test")) }
     }
@@ -25,7 +25,7 @@ kotlin {
 publishing {
     publications.withType<MavenPublication> {
         groupId = "com.dewildte.parsek"
-        artifactId = "parsek-text"
+        artifactId = "parsek-$artifactId"
         version = "0.1.0"
     }
 }

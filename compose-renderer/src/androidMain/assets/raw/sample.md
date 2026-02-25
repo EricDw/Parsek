@@ -194,6 +194,39 @@ which renders as a space in the output.
 >
 > And a paragraph with a [link](https://example.com).
 
+## GFM Extensions
+
+### Tables
+
+| Feature | Status | Notes |
+| :--- | :---: | ---: |
+| Tables | Done | Left, center, right alignment |
+| Strikethrough | Done | Uses `~~` delimiters |
+| Task lists | Done | Checkbox markers |
+| Extended autolinks | Done | Bare URLs and emails |
+
+### Strikethrough
+
+This text has ~~deleted content~~ in it.
+
+You can combine it: **~~bold strikethrough~~** and *~~italic strikethrough~~*.
+
+### Task Lists
+
+- [x] Implement table parser
+- [x] Implement strikethrough
+- [x] Implement task list items
+- [ ] Add more GFM features
+- [ ] Write documentation
+
+### Extended Autolinks
+
+Visit www.commonmark.org for more information.
+
+A URL autolink: https://example.com/path?q=hello
+
+Contact us at hello@example.com for support.
+
 ---
 
-*That's the full tour of CommonMark constructs rendered by Parsek!*
+*That's the full tour of CommonMark + GFM constructs rendered by Parsek!*

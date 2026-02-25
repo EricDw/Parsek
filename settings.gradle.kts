@@ -9,6 +9,6 @@ pluginManagement {
 rootProject.name = "parsek"
 include(":core")
 include(":text")
-include(":commonmark")
+include(":markdown")
 include(":compose-renderer")
 include(":benchmark")
