@@ -120,17 +120,22 @@ private fun tokenizeInlines(text: String, resolveRef: LinkRefResolver? = null): 
                 }
             }
 
-            // Emphasis delimiter runs: * and _
-            ch == '*' || ch == '_' -> {
+            // Emphasis delimiter runs: *, _, ~
+            ch == '*' || ch == '_' || ch == '~' -> {
                 val runStart = i
                 while (i < text.length && text[i] == ch) i++
                 val length = i - runStart
 
-                val charBefore = if (runStart > 0) text[runStart - 1] else null
-                val charAfter = if (i < text.length) text[i] else null
-                val (canOpen, canClose) = classifyDelimiterRun(charBefore, charAfter, ch)
+                // GFM strikethrough: only exactly 2 tildes work as delimiters
+                if (ch == '~' && length != 2) {
+                    tokens.add(InlineToken.Content(Inline.Text(ch.toString().repeat(length))))
+                } else {
+                    val charBefore = if (runStart > 0) text[runStart - 1] else null
+                    val charAfter = if (i < text.length) text[i] else null
+                    val (canOpen, canClose) = classifyDelimiterRun(charBefore, charAfter, ch)
 
-                tokens.add(InlineToken.DelimiterRun(ch, length, canOpen, canClose))
+                    tokens.add(InlineToken.DelimiterRun(ch, length, canOpen, canClose))
+                }
             }
 
             // Line ending → hard or soft break
@@ -180,7 +185,7 @@ private fun tokenizeInlines(text: String, resolveRef: LinkRefResolver? = null): 
                 val start = i
                 while (i < text.length) {
                     val c = text[i]
-                    if (c == '\\' || c == '`' || c == '*' || c == '_' || c == '\n' ||
+                    if (c == '\\' || c == '`' || c == '*' || c == '_' || c == '~' || c == '\n' ||
                         c == '&' || c == '<' || c == '[' || c == '!') break
                     i++
                 }
@@ -427,7 +432,8 @@ private fun processEmphasis(tokens: List<InlineToken>): List<Inline> {
         }
 
         val opener = delimStack[oi]
-        val useCount = if (opener.remaining >= 2 && closer.remaining >= 2) 2 else 1
+        val useCount = if (opener.char == '~') 2
+            else if (opener.remaining >= 2 && closer.remaining >= 2) 2 else 1
 
         opener.remaining -= useCount
         closer.remaining -= useCount
@@ -449,6 +455,7 @@ private fun processEmphasis(tokens: List<InlineToken>): List<Inline> {
         }
 
         val emphInline: Inline = when {
+            opener.char == '~' -> Inline.Strikethrough(innerInlines)
             useCount == 2 -> Inline.StrongEmphasis(innerInlines)
             else -> Inline.Emphasis(innerInlines)
         }

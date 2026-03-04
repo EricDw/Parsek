@@ -443,6 +443,16 @@ private fun scanParagraph(
         val line = lines[i]
         if (tryBlankLine(line.lexemes) != null) break
 
+        // GFM Table detection: after exactly one paragraph line, check for delimiter row
+        if (paraLines.size == 1) {
+            val headerText = extractLineText(paraLines[0])
+            val delimText = extractLineText(line)
+            val table = tryTableDelimiter(headerText, delimText)
+            if (table != null) {
+                return scanTable(lines, startIdx, i, table.first, table.second, sink, resolver)
+            }
+        }
+
         // Setext underline → heading
         val su = trySetextUnderline(line.lexemes)
         if (su != null) {
@@ -555,6 +565,166 @@ private fun emitParagraphInlines(
 
     val inlines = parseInlines(trimmed, resolver)
     emitInlineSpans(inlines, trimmed, sourceMap, sink)
+}
+
+// ---------------------------------------------------------------------------
+// GFM Table
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the text content from a line (stripping leading whitespace and trailing newline).
+ * Equivalent to LineParser's extractParagraphText.
+ */
+private fun extractLineText(line: Line): String {
+    val lexemes = line.lexemes
+    var idx = 0
+    while (idx < lexemes.size) {
+        when (lexemes[idx]) {
+            is Lexeme.Space, is Lexeme.SpaceRun, is Lexeme.Tab -> idx++
+            else -> break
+        }
+    }
+    val content = if (idx > 0) lexemes.subList(idx, lexemes.size) else lexemes
+    var endIdx = content.size
+    if (endIdx > 0 && content[endIdx - 1] is Lexeme.Newline) endIdx--
+    return if (endIdx > 0) lexemesToText(content.subList(0, endIdx)) else ""
+}
+
+/**
+ * Tries to parse headerText + delimText as a GFM table header + delimiter.
+ * Returns (alignments, headerCells) or null.
+ */
+private fun tryTableDelimiter(headerText: String, delimText: String): Pair<List<Block.Alignment>, List<String>>? {
+    if ('|' !in delimText) return null
+    val headerCells = splitTableCells(headerText)
+    if (headerCells.isEmpty()) return null
+    val delimCells = splitTableCells(delimText)
+    if (delimCells.size != headerCells.size) return null
+    val alignments = mutableListOf<Block.Alignment>()
+    for (cell in delimCells) {
+        val alignment = parseAlignmentCell(cell) ?: return null
+        alignments.add(alignment)
+    }
+    return alignments to headerCells
+}
+
+/**
+ * Scans a GFM table, emitting spans for the header row, delimiter row, and body rows.
+ */
+private fun scanTable(
+    lines: List<Line>,
+    headerIdx: Int,
+    delimIdx: Int,
+    alignments: List<Block.Alignment>,
+    headerCells: List<String>,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val colCount = alignments.size
+
+    // Emit header row — each cell gets TableHeaderCell + inline spans
+    emitTableRowSpans(lines[headerIdx], headerCells, TokenType.TableHeaderCell, sink, resolver)
+
+    // Emit delimiter row
+    val delimRange = contentRange(lines[delimIdx])
+    if (delimRange != null) {
+        sink.emit(TokenType.TableDelimiter, delimRange.start, delimRange.end)
+    }
+
+    // Collect and emit body rows
+    var i = delimIdx + 1
+    while (i < lines.size) {
+        val line = lines[i]
+        if (tryBlankLine(line.lexemes) != null) break
+        if (canInterruptParagraphLine(line)) break
+        val rowText = extractLineText(line)
+        val rowCells = splitTableCells(rowText)
+        val normalised = (0 until colCount).map { ci -> rowCells.getOrElse(ci) { "" } }
+        emitTableRowSpans(line, normalised, TokenType.TableCell, sink, resolver)
+        i++
+    }
+
+    return i
+}
+
+/**
+ * Emits spans for a single table row (header or body).
+ * Pipes get TableDelimiter spans; segments between pipes get the specified cell token type
+ * and inline spans for any emphasis/links/etc. within cells.
+ */
+private fun emitTableRowSpans(
+    line: Line,
+    cells: List<String>,
+    cellTokenType: TokenType,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+) {
+    val range = contentRange(line) ?: return
+    val rawText = extractLineText(line)
+    val docOffset = range.start
+
+    // Walk raw text, emitting pipe delimiters and tracking cell content regions
+    data class CellRegion(val start: Int, val end: Int, val text: String)
+    val cellRegions = mutableListOf<CellRegion>()
+    var idx = 0
+    var segStart = 0
+    var leadingPipeStripped = false
+
+    while (idx < rawText.length) {
+        when {
+            rawText[idx] == '\\' && idx + 1 < rawText.length && rawText[idx + 1] == '|' -> idx += 2
+            rawText[idx] == '`' -> {
+                var tickLen = 0
+                while (idx < rawText.length && rawText[idx] == '`') { tickLen++; idx++ }
+                val closeStart = scanClosingBackticks(rawText, idx, tickLen)
+                if (closeStart != -1) idx = closeStart + tickLen
+            }
+            rawText[idx] == '|' -> {
+                val segText = rawText.substring(segStart, idx).trim()
+                if (!leadingPipeStripped) {
+                    // First pipe — skip leading empty segment
+                    leadingPipeStripped = true
+                } else if (segText.isNotEmpty()) {
+                    // Find trimmed content position in raw text
+                    val trimStart = segStart + (rawText.substring(segStart, idx).length - rawText.substring(segStart, idx).trimStart().length)
+                    cellRegions.add(CellRegion(trimStart, trimStart + segText.length, segText))
+                }
+                sink.emit(TokenType.TableDelimiter, docOffset + idx, docOffset + idx + 1)
+                idx++
+                segStart = idx
+            }
+            else -> idx++
+        }
+    }
+    // Trailing segment after last pipe
+    val trailingText = rawText.substring(segStart).trim()
+    if (trailingText.isNotEmpty()) {
+        val trimStart = segStart + (rawText.length - segStart - rawText.substring(segStart).trimStart().length)
+        cellRegions.add(CellRegion(trimStart, trimStart + trailingText.length, trailingText))
+    }
+
+    // Emit cell token type + inline spans for each cell region
+    for (region in cellRegions) {
+        sink.emit(cellTokenType, docOffset + region.start, docOffset + region.end)
+        val inlines = parseInlines(region.text, resolver)
+        val sourceMap = SourceMap.simple(docOffset + region.start)
+        emitInlineSpans(inlines, region.text, sourceMap, sink)
+    }
+}
+
+private fun scanClosingBackticks(text: String, from: Int, tickLen: Int): Int {
+    var i = from
+    while (i < text.length) {
+        if (text[i] == '`') {
+            val start = i
+            var count = 0
+            while (i < text.length && text[i] == '`') { count++; i++ }
+            if (count == tickLen) return start
+        } else {
+            i++
+        }
+    }
+    return -1
 }
 
 // ---------------------------------------------------------------------------

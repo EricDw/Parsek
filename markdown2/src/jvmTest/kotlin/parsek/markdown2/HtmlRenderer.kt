@@ -3,32 +3,33 @@ package parsek.markdown2
 import parsek.markdown.ast.Block
 import parsek.markdown.ast.Document
 import parsek.markdown.ast.Inline
+import parsek.markdown.filterDisallowedRawHtml
 
 /**
  * Test-only HTML renderer for markdown2 AST.
  *
- * Currently handles leaf blocks with stub inline content (Phase 2).
- * Will be extended in later phases for full inline rendering.
+ * @param gfmTagFilter when `true`, applies the GFM disallowed raw HTML filter
+ *   (§6.11) to HTML blocks and inline raw HTML.
  */
-fun renderHtml(document: Document): String {
+fun renderHtml(document: Document, gfmTagFilter: Boolean = false): String {
     val sb = StringBuilder()
-    renderBlocks(sb, document.blocks)
+    renderBlocks(sb, document.blocks, gfmTagFilter)
     return sb.toString()
 }
 
-private fun renderBlocks(sb: StringBuilder, blocks: List<Block>) {
+private fun renderBlocks(sb: StringBuilder, blocks: List<Block>, gfmTagFilter: Boolean = false) {
     for (block in blocks) {
-        renderBlock(sb, block)
+        renderBlock(sb, block, gfmTagFilter)
     }
 }
 
-private fun renderBlock(sb: StringBuilder, block: Block) {
+private fun renderBlock(sb: StringBuilder, block: Block, gfmTagFilter: Boolean = false) {
     when (block) {
         is Block.ThematicBreak -> sb.append("<hr />\n")
 
         is Block.Heading -> {
             sb.append("<h${block.level}>")
-            renderInlines(sb, block.inlines)
+            renderInlines(sb, block.inlines, gfmTagFilter)
             sb.append("</h${block.level}>\n")
         }
 
@@ -51,25 +52,26 @@ private fun renderBlock(sb: StringBuilder, block: Block) {
         }
 
         is Block.HtmlBlock -> {
-            sb.append(block.literal)
+            val literal = if (gfmTagFilter) filterDisallowedRawHtml(block.literal) else block.literal
+            sb.append(literal)
         }
 
         is Block.Paragraph -> {
             sb.append("<p>")
-            renderInlines(sb, block.inlines)
+            renderInlines(sb, block.inlines, gfmTagFilter)
             sb.append("</p>\n")
         }
 
         is Block.BlockQuote -> {
             sb.append("<blockquote>\n")
-            renderBlocks(sb, block.blocks)
+            renderBlocks(sb, block.blocks, gfmTagFilter)
             sb.append("</blockquote>\n")
         }
 
         is Block.BulletList -> {
             sb.append("<ul>\n")
             for (item in block.items) {
-                renderListItem(sb, item, block.tight)
+                renderListItem(sb, item, block.tight, gfmTagFilter)
             }
             sb.append("</ul>\n")
         }
@@ -78,58 +80,118 @@ private fun renderBlock(sb: StringBuilder, block: Block) {
             if (block.start == 1) sb.append("<ol>\n")
             else sb.append("<ol start=\"${block.start}\">\n")
             for (item in block.items) {
-                renderListItem(sb, item, block.tight)
+                renderListItem(sb, item, block.tight, gfmTagFilter)
             }
             sb.append("</ol>\n")
         }
 
+        is Block.Table -> renderTable(sb, block, gfmTagFilter)
+
         is Block.BlankLine -> {}
         is Block.LinkReferenceDefinition -> {}
         is Block.ListItem -> {}
-        is Block.Table -> {}
         is Block.TableRow -> {}
         is Block.TableCell -> {}
     }
 }
 
-private fun renderListItem(sb: StringBuilder, item: Block.ListItem, tight: Boolean) {
+private fun renderTable(sb: StringBuilder, table: Block.Table, gfmTagFilter: Boolean) {
+    sb.append("<table>\n")
+    sb.append("<thead>\n")
+    sb.append("<tr>\n")
+    for (i in table.header.cells.indices) {
+        val cell = table.header.cells[i]
+        val align = table.alignments.getOrElse(i) { Block.Alignment.NONE }
+        val alignAttr = when (align) {
+            Block.Alignment.LEFT -> " align=\"left\""
+            Block.Alignment.RIGHT -> " align=\"right\""
+            Block.Alignment.CENTER -> " align=\"center\""
+            Block.Alignment.NONE -> ""
+        }
+        sb.append("<th$alignAttr>")
+        renderInlines(sb, cell.inlines, gfmTagFilter)
+        sb.append("</th>\n")
+    }
+    sb.append("</tr>\n")
+    sb.append("</thead>\n")
+    if (table.body.isNotEmpty()) {
+        sb.append("<tbody>\n")
+        for (row in table.body) {
+            sb.append("<tr>\n")
+            for (i in row.cells.indices) {
+                val cell = row.cells[i]
+                val align = table.alignments.getOrElse(i) { Block.Alignment.NONE }
+                val alignAttr = when (align) {
+                    Block.Alignment.LEFT -> " align=\"left\""
+                    Block.Alignment.RIGHT -> " align=\"right\""
+                    Block.Alignment.CENTER -> " align=\"center\""
+                    Block.Alignment.NONE -> ""
+                }
+                sb.append("<td$alignAttr>")
+                renderInlines(sb, cell.inlines, gfmTagFilter)
+                sb.append("</td>\n")
+            }
+            sb.append("</tr>\n")
+        }
+        sb.append("</tbody>\n")
+    }
+    sb.append("</table>\n")
+}
+
+private fun renderListItem(sb: StringBuilder, item: Block.ListItem, tight: Boolean, gfmTagFilter: Boolean = false) {
+    val checkbox = when (item.checked) {
+        true -> "<input checked=\"\" disabled=\"\" type=\"checkbox\"> "
+        false -> "<input disabled=\"\" type=\"checkbox\"> "
+        null -> ""
+    }
     if (tight) {
         // In tight lists, unwrap paragraphs to inline content
         if (item.blocks.isEmpty()) {
-            sb.append("<li>")
+            sb.append("<li>$checkbox")
         } else {
-            // Check if first block is a paragraph (no newline after <li>)
-            // or non-paragraph (needs newline after <li>)
             val firstBlock = item.blocks.first()
             if (firstBlock is Block.Paragraph) {
-                sb.append("<li>")
-                renderInlines(sb, firstBlock.inlines)
+                sb.append("<li>$checkbox")
+                renderInlines(sb, firstBlock.inlines, gfmTagFilter)
                 if (item.blocks.size > 1) sb.append("\n")
             } else {
-                sb.append("<li>\n")
-                renderBlock(sb, firstBlock)
+                sb.append("<li>$checkbox\n")
+                renderBlock(sb, firstBlock, gfmTagFilter)
             }
             for (block in item.blocks.drop(1)) {
                 if (block is Block.Paragraph) {
-                    renderInlines(sb, block.inlines)
+                    renderInlines(sb, block.inlines, gfmTagFilter)
                 } else {
-                    renderBlock(sb, block)
+                    renderBlock(sb, block, gfmTagFilter)
                 }
             }
         }
         sb.append("</li>\n")
     } else {
         if (item.blocks.isEmpty()) {
-            sb.append("<li>")
+            sb.append("<li>$checkbox")
         } else {
             sb.append("<li>\n")
-            renderBlocks(sb, item.blocks)
+            // For loose lists with checkboxes, insert checkbox at start of first paragraph
+            if (checkbox.isNotEmpty()) {
+                val first = item.blocks.first()
+                if (first is Block.Paragraph) {
+                    sb.append("<p>$checkbox")
+                    renderInlines(sb, first.inlines, gfmTagFilter)
+                    sb.append("</p>\n")
+                    renderBlocks(sb, item.blocks.drop(1), gfmTagFilter)
+                } else {
+                    renderBlocks(sb, item.blocks, gfmTagFilter)
+                }
+            } else {
+                renderBlocks(sb, item.blocks, gfmTagFilter)
+            }
         }
         sb.append("</li>\n")
     }
 }
 
-private fun renderInlines(sb: StringBuilder, inlines: List<Inline>) {
+private fun renderInlines(sb: StringBuilder, inlines: List<Inline>, gfmTagFilter: Boolean = false) {
     for (inline in inlines) {
         when (inline) {
             is Inline.Text -> sb.append(escapeHtml(inline.literal))
@@ -142,12 +204,12 @@ private fun renderInlines(sb: StringBuilder, inlines: List<Inline>) {
             }
             is Inline.Emphasis -> {
                 sb.append("<em>")
-                renderInlines(sb, inline.children)
+                renderInlines(sb, inline.children, gfmTagFilter)
                 sb.append("</em>")
             }
             is Inline.StrongEmphasis -> {
                 sb.append("<strong>")
-                renderInlines(sb, inline.children)
+                renderInlines(sb, inline.children, gfmTagFilter)
                 sb.append("</strong>")
             }
             is Inline.Link -> {
@@ -157,7 +219,7 @@ private fun renderInlines(sb: StringBuilder, inlines: List<Inline>) {
                     sb.append(" title=\"${escapeHtml(linkTitle)}\"")
                 }
                 sb.append(">")
-                renderInlines(sb, inline.children)
+                renderInlines(sb, inline.children, gfmTagFilter)
                 sb.append("</a>")
             }
             is Inline.Image -> {
@@ -174,16 +236,24 @@ private fun renderInlines(sb: StringBuilder, inlines: List<Inline>) {
                 sb.append(escapeHtml(if (inline.url.startsWith("mailto:")) inline.url.removePrefix("mailto:") else inline.url))
                 sb.append("</a>")
             }
-            is Inline.RawHtml -> sb.append(inline.literal)
+            is Inline.RawHtml -> {
+                val literal = if (gfmTagFilter) filterDisallowedRawHtml(inline.literal) else inline.literal
+                sb.append(literal)
+            }
             is Inline.HtmlEntity -> sb.append(inline.literal)
             is Inline.Strikethrough -> {
                 sb.append("<del>")
-                renderInlines(sb, inline.children)
+                renderInlines(sb, inline.children, gfmTagFilter)
                 sb.append("</del>")
             }
             is Inline.ExtendedAutolink -> {
+                val displayUrl = when {
+                    inline.url.startsWith("mailto:") -> inline.url.removePrefix("mailto:")
+                    inline.url.startsWith("http://www.") -> inline.url.removePrefix("http://")
+                    else -> inline.url
+                }
                 sb.append("<a href=\"${escapeHtml(inline.url)}\">")
-                sb.append(escapeHtml(inline.url))
+                sb.append(escapeHtml(displayUrl))
                 sb.append("</a>")
             }
         }

@@ -14,7 +14,13 @@ import parsek.markdown2.scanner.scanDocument
  *   2. **Link ref def extraction**: Extract link reference definitions from paragraphs
  *   3. **Inline pass**: Replace stub inlines with fully parsed inline content using resolver
  */
-fun parseDocument(text: String): Document {
+/**
+ * Parses a markdown string into a [Document] AST.
+ *
+ * @param gfm when `true`, enables GFM extensions (task lists, strikethrough,
+ *   tables, extended autolinks). When `false`, only standard CommonMark is used.
+ */
+fun parseDocument(text: String, gfm: Boolean = true): Document {
     // Stage 1: Scan characters into lexemes
     val lexemes = scanDocument(text)
 
@@ -34,7 +40,7 @@ fun parseDocument(text: String): Document {
         null
     }
 
-    val resolved = resolveInlines(cleanedBlocks, resolver)
+    val resolved = resolveInlines(cleanedBlocks, resolver, gfm)
     return Document(resolved)
 }
 
@@ -83,6 +89,13 @@ private fun extractLinkRefDefs(
             block.items.map { Block.ListItem(extractLinkRefDefs(it.blocks, refDefs), it.checked) },
         )
         is Block.ListItem -> Block.ListItem(extractLinkRefDefs(block.blocks, refDefs), block.checked)
+        is Block.Table -> Block.Table(
+            block.alignments,
+            Block.TableRow(block.header.cells.map { Block.TableCell(it.inlines) }),
+            block.body.map { row ->
+                Block.TableRow(row.cells.map { Block.TableCell(it.inlines) })
+            },
+        )
         else -> block
     }
 }
@@ -91,31 +104,101 @@ private fun extractLinkRefDefs(
  * Recursively walks the block tree and replaces stub [Inline.Text] nodes
  * with fully parsed inline content using [parseInlines].
  */
-private fun resolveInlines(blocks: List<Block>, resolver: LinkRefResolver?): List<Block> = blocks.map { block ->
+private fun resolveInlines(blocks: List<Block>, resolver: LinkRefResolver?, gfm: Boolean = true): List<Block> = blocks.map { block ->
     when (block) {
         is Block.Paragraph -> {
             val text = extractStubText(block.inlines)
-            Block.Paragraph(parseInlines(text, resolver))
+            val inlines = parseInlines(text, resolver)
+            Block.Paragraph(if (gfm) splitExtendedAutolinks(inlines) else inlines)
         }
         is Block.Heading -> {
             val text = extractStubText(block.inlines)
-            Block.Heading(block.level, parseInlines(text, resolver))
+            val inlines = parseInlines(text, resolver)
+            Block.Heading(block.level, if (gfm) splitExtendedAutolinks(inlines) else inlines)
         }
-        is Block.BlockQuote -> Block.BlockQuote(resolveInlines(block.blocks, resolver))
+        is Block.BlockQuote -> Block.BlockQuote(resolveInlines(block.blocks, resolver, gfm))
         is Block.BulletList -> Block.BulletList(
             block.tight,
             block.marker,
-            block.items.map { Block.ListItem(resolveInlines(it.blocks, resolver), it.checked) },
+            block.items.map { resolveListItem(it, resolver, gfm) },
         )
         is Block.OrderedList -> Block.OrderedList(
             block.tight,
             block.start,
             block.delimiter,
-            block.items.map { Block.ListItem(resolveInlines(it.blocks, resolver), it.checked) },
+            block.items.map { resolveListItem(it, resolver, gfm) },
         )
-        is Block.ListItem -> Block.ListItem(resolveInlines(block.blocks, resolver), block.checked)
+        is Block.ListItem -> resolveListItem(block, resolver, gfm)
+        is Block.Table -> Block.Table(
+            block.alignments,
+            resolveTableRow(block.header, resolver, gfm),
+            block.body.map { resolveTableRow(it, resolver, gfm) },
+        )
         else -> block // ThematicBreak, CodeBlock, HtmlBlock, etc. — no inline content
     }
+}
+
+/**
+ * Resolves inline content in each cell of a table row.
+ */
+private fun resolveTableRow(row: Block.TableRow, resolver: LinkRefResolver?, gfm: Boolean): Block.TableRow {
+    return Block.TableRow(row.cells.map { cell ->
+        val text = extractStubText(cell.inlines)
+        val inlines = parseInlines(text, resolver)
+        Block.TableCell(if (gfm) splitExtendedAutolinks(inlines) else inlines)
+    })
+}
+
+/**
+ * Resolves a list item, detecting a GFM task list marker at the start of its
+ * first paragraph's raw text (before inline parsing) and setting the
+ * `checked` field accordingly.
+ *
+ * A task list item marker is `[ ]` (unchecked), `[x]`, or `[X]` (checked),
+ * followed by at least one whitespace character, at the very start of the
+ * first paragraph in the item.
+ */
+private fun resolveListItem(item: Block.ListItem, resolver: LinkRefResolver?, gfm: Boolean): Block.ListItem {
+    var checked: Boolean? = item.checked
+    val blocks = item.blocks.toMutableList()
+
+    val firstParagraphIdx = blocks.indexOfFirst { it is Block.Paragraph }
+    if (gfm && firstParagraphIdx != -1) {
+        val para = blocks[firstParagraphIdx] as Block.Paragraph
+        val raw = extractStubText(para.inlines)
+        val taskResult = parseTaskMarker(raw)
+        if (taskResult != null) {
+            checked = taskResult.first
+            val stripped = raw.substring(taskResult.second)
+            val inlines = parseInlines(stripped, resolver)
+            blocks[firstParagraphIdx] = Block.Paragraph(splitExtendedAutolinks(inlines))
+            val remaining = blocks.mapIndexed { i, b ->
+                if (i == firstParagraphIdx) b else resolveInlines(listOf(b), resolver, gfm).first()
+            }
+            return Block.ListItem(remaining, checked)
+        }
+    }
+
+    return Block.ListItem(blocks.map { b ->
+        resolveInlines(listOf(b), resolver, gfm).first()
+    }, checked)
+}
+
+/**
+ * Parses a task list marker at the start of [text].
+ * Returns `(checked, endIndex)` or `null` if no valid marker is found.
+ */
+private fun parseTaskMarker(text: String): Pair<Boolean, Int>? {
+    if (text.length < 4) return null
+    if (text[0] != '[') return null
+    val checked = when (text[1]) {
+        ' ' -> false
+        'x', 'X' -> true
+        else -> return null
+    }
+    if (text[2] != ']') return null
+    if (text.length < 4 || (text[3] != ' ' && text[3] != '\t')) return null
+    return Pair(checked, 4)
 }
 
 /**

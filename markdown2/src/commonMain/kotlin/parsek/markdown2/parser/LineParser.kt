@@ -1053,6 +1053,34 @@ private fun collectParagraph(
 
         if (isBlankLine(line)) break
 
+        // GFM Table: check if current line is a table delimiter row
+        // (the previous line(s) form the header row)
+        if (textParts.size == 1 && !line.lazy) {
+            val delimLineText = extractParagraphText(line)
+            val table = tryTable(textParts[0], delimLineText)
+            if (table != null) {
+                i++ // consume delimiter row
+                // Collect body rows
+                val bodyRows = mutableListOf<Block.TableRow>()
+                val colCount = table.first.size // alignments count
+                while (i < lines.size) {
+                    val bodyLine = lines[i]
+                    if (isBlankLine(bodyLine)) break
+                    if (canInterruptParagraph(bodyLine)) break
+                    val rowText = extractParagraphText(bodyLine)
+                    val rowCells = splitTableCells(rowText)
+                    val normalised = (0 until colCount).map { ci ->
+                        Block.TableCell(listOf(Inline.Text(rowCells.getOrElse(ci) { "" })))
+                    }
+                    bodyRows.add(Block.TableRow(normalised))
+                    i++
+                }
+                val headerCells = table.second.map { Block.TableCell(listOf(Inline.Text(it))) }
+                val headerRow = Block.TableRow(headerCells)
+                return listOf(Block.Table(table.first, headerRow, bodyRows)) to i
+            }
+        }
+
         // Setext underline → heading (but first strip leading link ref defs)
         // Lazy continuation lines cannot be setext underlines (CommonMark §4.3)
         val su = if (!line.lazy) trySetextUnderline(line.lexemes) else null
@@ -1133,6 +1161,116 @@ private fun collectParagraph(
 
     val text = textParts.joinToString("\n")
     return listOf(Block.Paragraph(listOf(Inline.Text(text)))) to i
+}
+
+// ── GFM Table ───────────────────────────────────────────────────────────
+
+/**
+ * Tries to parse [headerText] + [delimText] as a GFM table header + delimiter.
+ * Returns (alignments, headerCells) or null.
+ */
+private fun tryTable(headerText: String, delimText: String): Pair<List<Block.Alignment>, List<String>>? {
+    // A table delimiter row must contain at least one pipe character
+    if ('|' !in delimText) return null
+    val headerCells = splitTableCells(headerText)
+    if (headerCells.isEmpty()) return null
+
+    val delimCells = splitTableCells(delimText)
+    if (delimCells.size != headerCells.size) return null
+
+    val alignments = mutableListOf<Block.Alignment>()
+    for (cell in delimCells) {
+        val alignment = parseAlignmentCell(cell) ?: return null
+        alignments.add(alignment)
+    }
+
+    return alignments to headerCells
+}
+
+/**
+ * Splits a line into table cells by unescaped `|` characters.
+ * Leading and trailing pipes are stripped. Each cell is trimmed.
+ * Escaped pipes (`\|`) and pipes inside backtick spans are preserved.
+ */
+internal fun splitTableCells(line: String): List<String> {
+    val cells = mutableListOf<String>()
+    val current = StringBuilder()
+    var i = 0
+    while (i < line.length) {
+        when {
+            line[i] == '\\' && i + 1 < line.length && line[i + 1] == '|' -> {
+                current.append("|")
+                i += 2
+            }
+            line[i] == '`' -> {
+                val tickStart = i
+                var tickLen = 0
+                while (i < line.length && line[i] == '`') { tickLen++; i++ }
+                current.append(line, tickStart, i)
+                val closeStart = findClosingBackticks(line, i, tickLen)
+                if (closeStart != -1) {
+                    val spanContent = line.substring(i, closeStart + tickLen)
+                    current.append(spanContent.replace("\\|", "|"))
+                    i = closeStart + tickLen
+                }
+            }
+            line[i] == '|' -> {
+                cells.add(current.toString().trim())
+                current.clear()
+                i++
+            }
+            else -> {
+                current.append(line[i])
+                i++
+            }
+        }
+    }
+    cells.add(current.toString().trim())
+
+    if (cells.isNotEmpty() && cells.first().isEmpty()) cells.removeAt(0)
+    if (cells.isNotEmpty() && cells.last().isEmpty()) cells.removeAt(cells.lastIndex)
+
+    return cells
+}
+
+private fun findClosingBackticks(line: String, from: Int, tickLen: Int): Int {
+    var i = from
+    while (i < line.length) {
+        if (line[i] == '`') {
+            val start = i
+            var count = 0
+            while (i < line.length && line[i] == '`') { count++; i++ }
+            if (count == tickLen) return start
+        } else {
+            i++
+        }
+    }
+    return -1
+}
+
+/**
+ * Parses a delimiter-row cell and returns the alignment, or null.
+ */
+internal fun parseAlignmentCell(cell: String): Block.Alignment? {
+    val trimmed = cell.trim()
+    if (trimmed.isEmpty()) return null
+
+    val left = trimmed.startsWith(':')
+    val right = trimmed.endsWith(':')
+
+    val start = if (left) 1 else 0
+    val end = if (right) trimmed.length - 1 else trimmed.length
+    if (start >= end) return null
+    for (j in start until end) {
+        if (trimmed[j] != '-') return null
+    }
+
+    return when {
+        left && right -> Block.Alignment.CENTER
+        left -> Block.Alignment.LEFT
+        right -> Block.Alignment.RIGHT
+        else -> Block.Alignment.NONE
+    }
 }
 
 /**

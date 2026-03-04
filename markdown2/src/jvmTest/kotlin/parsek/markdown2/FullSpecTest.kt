@@ -26,7 +26,7 @@ class FullSpecTest {
             val sr = results.getOrPut(ex.section) { SectionResult(ex.section) }
 
             try {
-                val doc = parseDocument(ex.markdown)
+                val doc = parseDocument(ex.markdown, gfm = false)
                 val actual = renderHtml(doc)
 
                 if (actual == ex.html) {

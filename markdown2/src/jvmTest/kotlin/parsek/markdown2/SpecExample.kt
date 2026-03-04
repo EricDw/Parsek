@@ -25,6 +25,18 @@ fun loadSpecExamples(): List<SpecExample> {
     return parseSpecJson(json)
 }
 
+/**
+ * Loads GFM spec examples from the bundled `gfm-spec.json` resource.
+ */
+fun loadGfmSpecExamples(): List<SpecExample> {
+    val json = SpecExample::class.java.getResourceAsStream("/gfm-spec.json")
+        ?.bufferedReader()
+        ?.readText()
+        ?: error("gfm-spec.json not found on classpath")
+
+    return parseSpecJson(json)
+}
+
 internal fun parseSpecJson(json: String): List<SpecExample> {
     val examples = mutableListOf<SpecExample>()
     var i = 0

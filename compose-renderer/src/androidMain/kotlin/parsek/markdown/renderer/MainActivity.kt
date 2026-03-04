@@ -14,19 +14,16 @@ import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.request.crossfade
-import parsek.ParserInput
-import parsek.Success
-import parsek.markdown.highlight.SpanSink
-import parsek.markdown.highlight.pDocumentHighlight
+import parsek.markdown2.highlight.scanDocument
+import parsek.markdown2.parser.parseDocument
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val markdown = assets.open("raw/sample.md").bufferedReader().readText()
-        val sink = SpanSink()
-        val input = ParserInput.of(markdown.toList(), sink)
-        val doc = (pDocumentHighlight()(input) as Success).value
+        val doc = parseDocument(markdown)
+        val spans = scanDocument(markdown)
 
         setContent {
             setSingletonImageLoaderFactory { context ->
@@ -39,7 +36,7 @@ class MainActivity : ComponentActivity() {
                 Surface {
                     MarkdownRenderer(
                         document = doc,
-                        spans = sink.spans,
+                        spans = spans,
                         modifier = Modifier
                             .padding(24.dp)
                             .verticalScroll(rememberScrollState()),

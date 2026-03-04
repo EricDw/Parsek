@@ -10,7 +10,7 @@ class RemainingDiffTest {
         val failures = mutableListOf<String>()
         for (ex in examples) {
             try {
-                val doc = parseDocument(ex.markdown)
+                val doc = parseDocument(ex.markdown, gfm = false)
                 val actual = renderHtml(doc)
                 if (actual != ex.html) {
                     failures.add(buildString {
