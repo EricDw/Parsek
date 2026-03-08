@@ -1,10 +1,7 @@
 package parsek.benchmark
 
-import parsek.ParserInput
-import parsek.Success
-import parsek.markdown.highlight.SpanSink
-import parsek.markdown.parser.pDocument
-import parsek.markdown.highlight.pDocumentHighlight
+import parsek.markdown.parser.parseDocument
+import parsek.markdown.highlight.scanDocument
 
 fun main() {
     println("=== Parsek CommonMark Profiler ===")
@@ -19,16 +16,15 @@ fun main() {
     print("Warming up ($warmupIterations iterations)...")
     repeat(warmupIterations) {
         for (ex in examples) {
-            val input = ParserInput.of(ex.markdown.toList(), Unit)
-            pDocument<Unit>()(input)
+            parseDocument(ex.markdown)
         }
     }
     println(" done")
     println()
 
-    // --- Measure pDocument ---
+    // --- Measure parseDocument ---
     val measureIterations = 100
-    println("Measuring pDocument ($measureIterations iterations)...")
+    println("Measuring parseDocument ($measureIterations iterations)...")
 
     val perExampleTimes = LongArray(examples.size)
     val iterationTimes = LongArray(measureIterations)
@@ -37,8 +33,7 @@ fun main() {
         val iterStart = System.nanoTime()
         for ((idx, ex) in examples.withIndex()) {
             val start = System.nanoTime()
-            val input = ParserInput.of(ex.markdown.toList(), Unit)
-            pDocument<Unit>()(input)
+            parseDocument(ex.markdown)
             perExampleTimes[idx] += System.nanoTime() - start
         }
         iterationTimes[iter] = System.nanoTime() - iterStart
@@ -49,7 +44,7 @@ fun main() {
     val throughput = examples.size.toLong() * measureIterations * 1_000_000_000L / totalNs.toDouble()
 
     println()
-    println("--- pDocument Results ---")
+    println("--- parseDocument Results ---")
     println("Total time:       %.2f ms".format(totalNs / 1_000_000.0))
     println("Avg per iteration: %.2f ms (all ${examples.size} examples)".format(avgIterMs))
     println("Throughput:        %.0f examples/sec".format(throughput))
@@ -74,16 +69,14 @@ fun main() {
     }
     println()
 
-    // --- Measure pDocumentHighlight ---
-    println("Measuring pDocumentHighlight ($measureIterations iterations)...")
+    // --- Measure scanDocument (highlight) ---
+    println("Measuring scanDocument ($measureIterations iterations)...")
 
     val highlightIterationTimes = LongArray(measureIterations)
     repeat(measureIterations) { iter ->
         val iterStart = System.nanoTime()
         for (ex in examples) {
-            val sink = SpanSink()
-            val input = ParserInput.of(ex.markdown.toList(), sink)
-            pDocumentHighlight()(input)
+            scanDocument(ex.markdown)
         }
         highlightIterationTimes[iter] = System.nanoTime() - iterStart
     }
@@ -94,7 +87,7 @@ fun main() {
         examples.size.toLong() * measureIterations * 1_000_000_000L / highlightTotalNs.toDouble()
 
     println()
-    println("--- pDocumentHighlight Results ---")
+    println("--- scanDocument Results ---")
     println("Total time:       %.2f ms".format(highlightTotalNs / 1_000_000.0))
     println("Avg per iteration: %.2f ms (all ${examples.size} examples)".format(highlightAvgMs))
     println("Throughput:        %.0f examples/sec".format(highlightThroughput))
@@ -113,16 +106,14 @@ fun main() {
 
     // Warmup
     repeat(10) {
-        val input = ParserInput.of(largeDoc.toList(), Unit)
-        pDocument<Unit>()(input)
+        parseDocument(largeDoc)
     }
 
     val largeIterations = 20
     val largeTimes = LongArray(largeIterations)
     repeat(largeIterations) { iter ->
         val start = System.nanoTime()
-        val input = ParserInput.of(largeDoc.toList(), Unit)
-        pDocument<Unit>()(input)
+        parseDocument(largeDoc)
         largeTimes[iter] = System.nanoTime() - start
     }
 
@@ -131,13 +122,4 @@ fun main() {
     val largeMaxMs = largeTimes.max() / 1_000_000.0
     println("Avg: %.2f ms  Min: %.2f ms  Max: %.2f ms".format(largeAvgMs, largeMinMs, largeMaxMs))
     println("Throughput: %.0f chars/sec".format(largeDoc.length / (largeAvgMs / 1000.0)))
-    println()
-
-    // --- Parse success rate ---
-    var successes = 0
-    for (ex in examples) {
-        val input = ParserInput.of(ex.markdown.toList(), Unit)
-        if (pDocument<Unit>()(input) is Success) successes++
-    }
-    println("Parse success rate: $successes/${examples.size}")
 }

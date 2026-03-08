@@ -13,7 +13,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import parsek.markdown.highlight.Span
-import parsek.markdown2.highlight.scanDocument
+import parsek.markdown.highlight.scanDocument
 
 /**
  * Displays raw markdown source text with syntax highlighting applied

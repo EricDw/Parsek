@@ -1,16 +1,13 @@
 package parsek.markdown
 
-import parsek.ParserInput
-import parsek.Success
-import parsek.markdown.parser.pDocument
-import kotlin.test.Test
+import parsek.markdown.parser.parseDocument
+import org.junit.Test
 
 /**
- * Runs the GFM 0.29 spec test suite against [pDocument].
+ * Runs the GFM 0.29 spec test suite against markdown's [parseDocument].
  *
- * This test focuses on the 24 GFM-specific extension examples (tables,
- * strikethrough, task list items, extended autolinks, disallowed raw HTML).
- * CommonMark-only examples are run separately in [SpecTest].
+ * Focuses on the 24 GFM-specific extension examples (tables, strikethrough,
+ * task list items, extended autolinks, disallowed raw HTML).
  */
 class GfmSpecTest {
 
@@ -19,7 +16,6 @@ class GfmSpecTest {
         val allExamples = loadGfmSpecExamples()
         require(allExamples.isNotEmpty()) { "No GFM spec examples loaded" }
 
-        // Only run GFM extension examples.
         val extensionExamples = allExamples.filter { it.extensions.isNotBlank() }
         require(extensionExamples.isNotEmpty()) { "No GFM extension examples found" }
 
@@ -31,19 +27,12 @@ class GfmSpecTest {
         for (ex in extensionExamples) {
             val section = sectionResults.getOrPut(ex.section) { SectionResult() }
             try {
-                val input = ParserInput.of(ex.markdown.toList(), Unit)
-                val result = pDocument<Unit>()(input)
+                val doc = parseDocument(ex.markdown)
+                val actualHtml = renderHtml(doc, gfmTagFilter = true)
 
-                if (result is Success) {
-                    val actualHtml = renderHtml(result.value, gfmTagFilter = true)
-                    if (actualHtml == ex.html) {
-                        totalPass++
-                        section.pass++
-                    } else {
-                        totalFail++
-                        section.fail++
-                        section.failedExamples.add(ex.example)
-                    }
+                if (actualHtml == ex.html) {
+                    totalPass++
+                    section.pass++
                 } else {
                     totalFail++
                     section.fail++
@@ -56,11 +45,10 @@ class GfmSpecTest {
             }
         }
 
-        // Print summary
         val total = totalPass + totalFail + totalError
         println()
         println("=".repeat(70))
-        println("GFM 0.29 Extension Compliance Report")
+        println("GFM 0.29 Extension Compliance Report (markdown)")
         println("=".repeat(70))
         println()
         println("Overall: $totalPass/$total passed  ($totalFail failed, $totalError errors)")
@@ -86,7 +74,6 @@ class GfmSpecTest {
         println("-".repeat(70))
         println()
 
-        // Print failures per section for debugging
         for ((section, result) in sectionResults) {
             val failed = result.failedExamples + result.errorExamples
             if (failed.isNotEmpty()) {
@@ -101,10 +88,9 @@ class GfmSpecTest {
         val extensionExamples = allExamples.filter { it.extensions.isNotBlank() }
 
         for (ex in extensionExamples) {
-            val input = ParserInput.of(ex.markdown.toList(), Unit)
-            val result = pDocument<Unit>()(input)
-            if (result is Success) {
-                val actualHtml = renderHtml(result.value, gfmTagFilter = true)
+            try {
+                val doc = parseDocument(ex.markdown)
+                val actualHtml = renderHtml(doc, gfmTagFilter = true)
                 if (actualHtml != ex.html) {
                     println("--- Example ${ex.example} (${ex.section}) [${ex.extensions}] ---")
                     println("MARKDOWN: ${ex.markdown.replace("\n", "\\n")}")
@@ -112,6 +98,11 @@ class GfmSpecTest {
                     println("ACTUAL:   ${actualHtml.replace("\n", "\\n")}")
                     println()
                 }
+            } catch (e: Exception) {
+                println("--- Example ${ex.example} (${ex.section}) [${ex.extensions}] ERROR ---")
+                println("MARKDOWN: ${ex.markdown.replace("\n", "\\n")}")
+                println("ERROR:    ${e.message}")
+                println()
             }
         }
     }

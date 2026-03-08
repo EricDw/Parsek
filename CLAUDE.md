@@ -13,8 +13,7 @@ Built on top of the library is a **CommonMark 0.31.2 parser** with all five
 items, extended autolinks, disallowed raw HTML), a syntax highlighting system,
 and a Compose Multiplatform renderer.
 
-Spec compliance: 96.3% CommonMark (628/652), 100% GFM extensions (24/24).
-See `COMMONMARK_PLAN.md` and `GFM_PLAN.md` for the roadmaps.
+Spec compliance: 100% CommonMark (652/652), 100% GFM extensions (24/24).
 
 ---
 
@@ -43,8 +42,8 @@ Dependencies: `:core` ← `:text` ← `:markdown` ← `:compose-renderer` / `:be
 | `markdown/src/commonMain/kotlin/parsek/markdown/ast/Block.kt` | 15 block-level AST types (incl. Table, TableRow, TableCell) |
 | `markdown/src/commonMain/kotlin/parsek/markdown/ast/Inline.kt` | 12 inline-level AST types (incl. Strikethrough, ExtendedAutolink) |
 | `markdown/src/commonMain/kotlin/parsek/markdown/ast/Document.kt` | Root `Document` type |
-| `markdown/src/commonMain/kotlin/parsek/markdown/parser/DocumentParser.kt` | `pDocument` / `pBlock` entry points |
-| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/DocumentHighlight.kt` | `pDocumentHighlight` entry point |
+| `markdown/src/commonMain/kotlin/parsek/markdown/parser/DocumentParser.kt` | `parseDocument()` entry point |
+| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/Scanner.kt` | `scanDocument()` syntax highlighting |
 | `markdown/src/commonMain/kotlin/parsek/markdown/highlight/TokenType.kt` | 30 semantic token types (incl. GFM extensions) |
 | `compose-renderer/src/commonMain/kotlin/parsek/markdown/renderer/MarkdownRenderer.kt` | Compose rendering |
 
@@ -133,22 +132,23 @@ This means sequence (`+`) binds tighter than choice (`or`) without extra parenth
 - **`Block`** sealed interface — 15 types: `ThematicBreak`, `Heading`, `IndentedCodeBlock`, `FencedCodeBlock`, `HtmlBlock`, `LinkReferenceDefinition`, `Paragraph`, `BlankLine`, `BlockQuote`, `ListItem` (with `checked: Boolean?` for task lists), `BulletList`, `OrderedList`, `Table`, `TableRow`, `TableCell`
 - **`Inline`** sealed interface — 12 types: `Text`, `SoftBreak`, `HardBreak`, `CodeSpan`, `Emphasis`, `StrongEmphasis`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `Strikethrough`, `ExtendedAutolink`
 
-### Parsers (`parsek.markdown.parser`)
+### Parser (`parsek.markdown.parser`)
 
-Block parsers in `parser/block/`, inline parsers in `parser/inline/`.
-Entry point: `DocumentParser.pDocument()`.
+Three-pass pipeline: scan → block parse (with container blocks) → inline resolution.
+Entry point: `parseDocument(text: String, gfm: Boolean = true): Document`.
+
+Key files: `DocumentParser.kt` (orchestration), `LineParser.kt` (block parsing),
+`InlineParser.kt` (inline parsing), `HtmlEntities.kt` (2125 HTML5 named entities).
 
 ### Syntax Highlighting (`parsek.markdown.highlight`)
 
-The highlight system produces flat `Span` annotations without building an AST:
+The highlight system produces flat `Span` annotations by walking the parsed AST
+and mapping inline nodes back to source positions via `SourceMap`:
 
 - **`TokenType`** — 30 sealed types for semantic tokens (headings, code, emphasis, GFM tables/strikethrough/task markers/autolinks, etc.)
 - **`Span(type, start, end)`** — half-open range annotation
-- **`SpanSink`** — mutable accumulator used as the `U` (user context) parameter
-- **`pTag(type, parser)`** — wraps a parser to record a `Span` on success
-- **`pDocumentHighlight()`** — entry point wiring all highlight wrappers
-
-Block highlights in `highlight/block/`, inline highlights in `highlight/inline/`.
+- **`SpanSink`** — mutable accumulator for collecting spans
+- **`scanDocument(text: String): List<Span>`** — entry point for syntax highlighting
 
 ---
 

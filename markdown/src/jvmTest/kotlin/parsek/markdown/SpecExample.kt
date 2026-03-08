@@ -15,11 +15,6 @@ data class SpecExample(
 
 /**
  * Loads spec examples from the bundled `spec.json` resource.
- *
- * The JSON format is a flat array of objects with keys:
- * `markdown`, `html`, `example`, `section`, `start_line`, `end_line`.
- *
- * This parser is intentionally manual to avoid adding a serialization dependency.
  */
 fun loadSpecExamples(): List<SpecExample> {
     val json = SpecExample::class.java.getResourceAsStream("/spec.json")
@@ -32,10 +27,6 @@ fun loadSpecExamples(): List<SpecExample> {
 
 /**
  * Loads GFM spec examples from the bundled `gfm-spec.json` resource.
- *
- * The JSON format matches [loadSpecExamples] but includes an additional
- * `extensions` field identifying which GFM extension (if any) an example
- * requires.
  */
 fun loadGfmSpecExamples(): List<SpecExample> {
     val json = SpecExample::class.java.getResourceAsStream("/gfm-spec.json")
@@ -64,17 +55,14 @@ internal fun parseSpecJson(json: String): List<SpecExample> {
     fun parseJsonString(): String {
         skipWhitespace()
         require(i < len && json[i] == '"') { "Expected '\"' at position $i" }
-        i++ // skip opening quote
+        i++
         val sb = StringBuilder()
         while (i < len) {
             val ch = json[i]
-            if (ch == '"') {
-                i++ // skip closing quote
-                return sb.toString()
-            }
+            if (ch == '"') { i++; return sb.toString() }
             if (ch == '\\') {
                 i++
-                require(i < len) { "Unexpected end of string escape" }
+                require(i < len)
                 when (json[i]) {
                     '"' -> sb.append('"')
                     '\\' -> sb.append('\\')
@@ -86,15 +74,12 @@ internal fun parseSpecJson(json: String): List<SpecExample> {
                     'f' -> sb.append('\u000C')
                     'u' -> {
                         i++
-                        require(i + 4 <= len) { "Incomplete unicode escape" }
+                        require(i + 4 <= len)
                         val hex = json.substring(i, i + 4)
                         sb.append(hex.toInt(16).toChar())
-                        i += 3 // loop will increment past last hex digit
+                        i += 3
                     }
-                    else -> {
-                        sb.append('\\')
-                        sb.append(json[i])
-                    }
+                    else -> { sb.append('\\'); sb.append(json[i]) }
                 }
             } else {
                 sb.append(ch)
@@ -112,7 +97,6 @@ internal fun parseSpecJson(json: String): List<SpecExample> {
         return json.substring(start, i).toInt()
     }
 
-    // Parse array of objects
     skipWhitespace()
     expect('[')
     skipWhitespace()
@@ -141,7 +125,6 @@ internal fun parseSpecJson(json: String): List<SpecExample> {
                 "end_line" -> endLine = parseJsonInt()
                 "extensions" -> extensions = parseJsonString()
                 else -> {
-                    // Skip unknown value (string or number)
                     skipWhitespace()
                     if (i < len && json[i] == '"') parseJsonString()
                     else parseJsonInt()

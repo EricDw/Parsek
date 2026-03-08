@@ -1,334 +1,837 @@
 package parsek.markdown.highlight
 
-import parsek.Failure
-import parsek.Parser
-import parsek.ParserInput
-import parsek.Success
 import parsek.markdown.ast.Block
 import parsek.markdown.ast.Inline
-import parsek.markdown.parser.collectLinkRefDefs
-import parsek.markdown.parser.extractRawContent
-import parsek.markdown.parser.block.parseLinkDestination
-import parsek.markdown.parser.block.parseLinkTitle
-import parsek.markdown.parser.block.canInterruptParagraph
-import parsek.markdown.parser.block.setextUnderlineLevel
-import parsek.markdown.parser.inline.LinkRefResolver
-import parsek.markdown.parser.inline.parseInlineContent
-import parsek.markdown.parser.inline.splitExtendedAutolinks
-import parsek.pMany
+import parsek.markdown.highlight.Span
+import parsek.markdown.highlight.SourceMap
+import parsek.markdown.highlight.SpanSink
+import parsek.markdown.highlight.TokenType
+import parsek.markdown.highlight.emit
+import parsek.markdown.lexeme.Lexeme
+import parsek.markdown.lexeme.SourceRange
+import parsek.markdown.lexer.*
+import parsek.markdown.parser.*
 
 // ---------------------------------------------------------------------------
-// LocatedBlock — pairs a Block with its start index in the document
+// scanDocument — top-level entry point
 // ---------------------------------------------------------------------------
 
-internal data class LocatedBlock(val block: Block, val startIndex: Int)
+/**
+ * Scans a markdown document and returns a flat list of [Span]s with
+ * absolute document offsets for syntax highlighting.
+ *
+ * Uses `:markdown`'s pipeline:
+ * 1. Parse document to get link ref defs
+ * 2. Scan text into lexemes (with [SourceRange])
+ * 3. Walk lines emitting block-level AND inline-level spans
+ */
+fun scanDocument(text: String): List<Span> {
+    val sink = SpanSink()
+
+    // Stage 1: Scan into lexemes and split into lines
+    val lexemes = parsek.markdown.scanner.scanDocument(text)
+    val rawLines = splitLines(lexemes)
+    val lines = rawLines.map { Line.from(it) }
+
+    // Stage 2: Parse blocks, then extract ref defs from raw blocks (before they're consumed)
+    val blocks = parseLines(lines)
+    val refDefs = mutableMapOf<String, Pair<String, String?>>()
+    extractRefDefs(blocks, refDefs)
+    val resolver: LinkRefResolver? = if (refDefs.isNotEmpty()) {
+        { label -> refDefs[label] }
+    } else null
+
+    // Stage 3: Walk lines emitting both block and inline spans
+    scanBlockSpans(lines, sink, resolver)
+
+    return sink.spans
+}
 
 // ---------------------------------------------------------------------------
-// pLocatedBlockHighlight — wraps pBlockHighlight to capture start index
+// Block-level span emission — walks lines detecting blocks
 // ---------------------------------------------------------------------------
 
-internal fun pLocatedBlockHighlight(): Parser<Char, LocatedBlock, SpanSink> =
-    Parser { input ->
-        val start = input.index
-        when (val result = pBlockHighlight()(input)) {
-            is Success -> Success(LocatedBlock(result.value, start), result.nextIndex, result.input)
-            is Failure -> result
+private fun scanBlockSpans(
+    lines: List<Line>,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+) {
+    var i = 0
+    while (i < lines.size) {
+        i = scanBlockLine(lines, i, sink, resolver)
+    }
+}
+
+private fun scanBlockLine(
+    lines: List<Line>,
+    i: Int,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val line = lines[i]
+
+    // 1. Blank line
+    if (tryBlankLine(line.lexemes) != null) return i + 1
+
+    // 2. Block quote
+    val bqStrip = tryStripBlockQuoteMarker(line)
+    if (bqStrip != null) return scanBlockQuote(lines, i, sink, resolver)
+
+    // 3. Thematic break (before list markers since `---` is both)
+    val tb = tryThematicBreak(line.lexemes)
+    if (tb != null) {
+        sink.emit(TokenType.ThematicBreak, tb.range.start, tb.range.end)
+        return i + 1
+    }
+
+    // 4. ATX heading
+    val atx = tryAtxHeading(line.lexemes)
+    if (atx != null) {
+        val marker = atx.first
+        val content = atx.second
+        sink.emit(TokenType.HeadingMarker, marker.range.start, marker.range.end)
+        if (content != null) {
+            sink.emit(TokenType.HeadingText, content.range.start, content.range.end)
+            // Parse and emit inline spans for heading content
+            val rawText = lexemesToText(content.lexemes)
+            val sourceMap = SourceMap.simple(content.range.start)
+            val inlines = parseInlines(rawText, resolver)
+            emitInlineSpans(inlines, rawText, sourceMap, sink)
+        }
+        return i + 1
+    }
+
+    // 5. Fenced code block
+    val fence = tryCodeFenceOpen(line.lexemes)
+    if (fence != null) return scanFencedCode(lines, i, fence, sink)
+
+    // 6. HTML block
+    val htmlType = detectHtmlBlockType(line.lexemes)
+    if (htmlType > 0) return scanHtmlBlock(lines, i, htmlType, sink)
+
+    // 7. Bullet list
+    val bullet = tryStripBulletMarker(line)
+    if (bullet != null) return scanBulletList(lines, i, sink, resolver)
+
+    // 8. Ordered list
+    val ordered = tryStripOrderedMarker(line)
+    if (ordered != null) return scanOrderedList(lines, i, sink, resolver)
+
+    // 9. Indented code block
+    if (tryIndentedCodeLine(line.lexemes) != null) return scanIndentedCode(lines, i, sink)
+
+    // 10. Paragraph (possibly with setext underline)
+    return scanParagraph(lines, i, sink, resolver)
+}
+
+// ---------------------------------------------------------------------------
+// Block quote
+// ---------------------------------------------------------------------------
+
+private fun scanBlockQuote(
+    lines: List<Line>,
+    startIdx: Int,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val innerLines = mutableListOf<Line>()
+    var i = startIdx
+    var lastInnerWasBlank = false
+    var lastBlockIsParagraph = false
+
+    while (i < lines.size) {
+        val line = lines[i]
+        val strip = tryStripBlockQuoteMarker(line)
+        if (strip != null) {
+            emitBlockQuoteMarker(line, sink)
+            lastInnerWasBlank = tryBlankLine(strip.innerLine.lexemes) != null
+            innerLines.add(strip.innerLine)
+            if (!lastInnerWasBlank) {
+                lastBlockIsParagraph = tryCodeFenceOpen(strip.innerLine.lexemes) == null &&
+                    tryIndentedCodeLine(strip.innerLine.lexemes) == null &&
+                    tryThematicBreak(strip.innerLine.lexemes) == null &&
+                    tryAtxHeading(strip.innerLine.lexemes) == null &&
+                    detectHtmlBlockType(strip.innerLine.lexemes) <= 0
+            }
+            i++
+        } else if (tryBlankLine(line.lexemes) != null) {
+            break
+        } else if (!lastInnerWasBlank && lastBlockIsParagraph && !canInterruptParagraphLine(line) && innerLines.isNotEmpty()) {
+            innerLines.add(line)
+            i++
+        } else {
+            break
         }
     }
 
-// ---------------------------------------------------------------------------
-// Line reading helpers (replicated from ParagraphParser — they are private)
-// ---------------------------------------------------------------------------
+    var j = 0
+    while (j < innerLines.size) {
+        j = scanBlockLine(innerLines, j, sink, resolver)
+    }
 
-private fun isBlankLine(content: String): Boolean =
-    content.all { it == ' ' || it == '\t' }
-
-private fun advancePastLineEnding(chars: List<Char>, idx: Int): Int = when {
-    idx >= chars.size -> idx
-    chars[idx] == '\r' && idx + 1 < chars.size && chars[idx + 1] == '\n' -> idx + 2
-    chars[idx] == '\r' || chars[idx] == '\n' -> idx + 1
-    else -> idx
+    return i
 }
 
-private fun readLineEnd(chars: List<Char>, startIdx: Int): Int {
-    var i = startIdx
-    while (i < chars.size && chars[i] != '\n' && chars[i] != '\r') i++
+private fun emitBlockQuoteMarker(line: Line, sink: SpanSink) {
+    for (lex in line.lexemes) {
+        if (lex is Lexeme.AngleClose) {
+            sink.emit(TokenType.BlockQuoteMarker, lex.range.start, lex.range.end)
+            return
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fenced code block
+// ---------------------------------------------------------------------------
+
+private fun scanFencedCode(
+    lines: List<Line>,
+    startIdx: Int,
+    fence: Pair<parsek.markdown.token.Token.CodeFenceOpen, parsek.markdown.token.Token.CodeFenceInfo?>,
+    sink: SpanSink,
+): Int {
+    val open = fence.first
+    val info = fence.second
+
+    sink.emit(TokenType.CodeFence, open.range.start, open.range.end)
+    if (info != null) {
+        sink.emit(TokenType.CodeInfo, info.range.start, info.range.end)
+    }
+
+    var i = startIdx + 1
+    while (i < lines.size) {
+        val close = tryCodeFenceClose(lines[i].lexemes, open.fenceChar, open.fenceLength)
+        if (close != null) {
+            sink.emit(TokenType.CodeFence, close.range.start, close.range.end)
+            return i + 1
+        }
+        val lr = lineRange(lines[i].lexemes)
+        sink.emit(TokenType.CodeContent, lr.start, lr.end)
+        i++
+    }
     return i
 }
 
 // ---------------------------------------------------------------------------
-// Source map builders
+// HTML block
 // ---------------------------------------------------------------------------
 
-/**
- * Builds a [SourceMap] for a paragraph starting at [startIdx].
- *
- * Replicates the line-walking logic of `pParagraph`:
- * - Each line's content is obtained by stripping all leading whitespace
- *   (matching [String.trimStart]).
- * - Lines are joined with `\n`.
- * - The source map records where each stripped line begins in the document.
- */
-internal fun buildParagraphSourceMap(chars: List<Char>, startIdx: Int): SourceMap {
-    val entries = mutableListOf<SourceMap.LineMapping>()
-    var idx = startIdx
-    var rawOffset = 0
-    var isFirst = true
+private fun scanHtmlBlock(
+    lines: List<Line>,
+    startIdx: Int,
+    htmlType: Int,
+    sink: SpanSink,
+): Int {
+    val firstRange = lineRange(lines[startIdx].lexemes)
+    sink.emit(TokenType.HtmlBlock, firstRange.start, firstRange.end)
 
-    while (idx < chars.size) {
-        if (!isFirst && canInterruptParagraph(chars, idx)) break
-
-        val lineEnd = readLineEnd(chars, idx)
-        val lineContent = chars.subList(idx, lineEnd).joinToString("")
-        if (isBlankLine(lineContent)) break
-
-        // Find where content starts after trimStart (skip all leading whitespace)
-        var contentStart = idx
-        while (contentStart < lineEnd && chars[contentStart].isWhitespace()) contentStart++
-
-        entries.add(SourceMap.LineMapping(rawOffset, contentStart))
-
-        val strippedLen = lineEnd - contentStart
-        rawOffset += strippedLen + 1 // +1 for the \n separator in joinToString("\n")
-
-        idx = advancePastLineEnding(chars, lineEnd)
-        isFirst = false
+    if (htmlType in 1..5 && htmlBlockEndCondition(lines[startIdx].text, htmlType)) {
+        return startIdx + 1
     }
 
-    return SourceMap(entries)
-}
-
-/**
- * Builds a [SourceMap] for an ATX heading starting at [startIdx].
- *
- * Replicates the content extraction of `pAtxHeading` + `normalizeAtxContent`:
- * - Skip 0–3 leading spaces
- * - Skip 1–6 `#` characters
- * - Skip leading spaces/tabs after the `#` run
- * - Content starts at the first non-whitespace character
- */
-internal fun buildAtxHeadingSourceMap(chars: List<Char>, startIdx: Int): SourceMap {
-    var idx = startIdx
-    // Skip 0–3 leading spaces
-    var spaces = 0
-    while (spaces < 3 && idx < chars.size && chars[idx] == ' ') { spaces++; idx++ }
-    // Skip # characters
-    while (idx < chars.size && chars[idx] == '#') idx++
-    // Skip leading spaces/tabs after # run (matches normalizeAtxContent's trimStart)
-    while (idx < chars.size && chars[idx] != '\n' && chars[idx] != '\r' &&
-        (chars[idx] == ' ' || chars[idx] == '\t')
-    ) idx++
-    return SourceMap.simple(idx)
-}
-
-/**
- * Builds a [SourceMap] for a setext heading starting at [startIdx].
- *
- * Replicates the content extraction of `pSetextHeading`:
- * - Content lines have 0–3 leading spaces stripped (via `stripUpTo3Spaces`)
- * - Lines are joined with `\n`
- * - Stops at the setext underline
- */
-internal fun buildSetextHeadingSourceMap(chars: List<Char>, startIdx: Int): SourceMap {
-    val entries = mutableListOf<SourceMap.LineMapping>()
-    var idx = startIdx
-    var rawOffset = 0
-    var isFirst = true
-
-    while (idx < chars.size) {
-        // After the first line, check for setext underline
-        if (!isFirst) {
-            val level = setextUnderlineLevel(chars, idx)
-            if (level != null) break
+    var i = startIdx + 1
+    while (i < lines.size) {
+        val line = lines[i]
+        when (htmlType) {
+            1, 2, 3, 4, 5 -> {
+                val range = lineRange(line.lexemes)
+                sink.emit(TokenType.HtmlBlock, range.start, range.end)
+                i++
+                if (htmlBlockEndCondition(line.text, htmlType)) break
+            }
+            6, 7 -> {
+                if (tryBlankLine(line.lexemes) != null) break
+                val range = lineRange(line.lexemes)
+                sink.emit(TokenType.HtmlBlock, range.start, range.end)
+                i++
+            }
+            else -> break
         }
-
-        if (!isFirst && canInterruptParagraph(chars, idx)) break
-
-        val lineEnd = readLineEnd(chars, idx)
-        val lineContent = chars.subList(idx, lineEnd).joinToString("")
-        if (isBlankLine(lineContent)) break
-
-        // stripUpTo3Spaces: skip up to 3 leading space characters
-        var contentStart = idx
-        var stripped = 0
-        while (stripped < 3 && contentStart < lineEnd && chars[contentStart] == ' ') {
-            stripped++
-            contentStart++
-        }
-
-        entries.add(SourceMap.LineMapping(rawOffset, contentStart))
-
-        val strippedLen = lineEnd - contentStart
-        rawOffset += strippedLen + 1 // +1 for \n separator
-
-        idx = advancePastLineEnding(chars, lineEnd)
-        isFirst = false
     }
-
-    return SourceMap(entries)
+    return i
 }
 
-/**
- * Determines the correct source map builder for a [Block.Heading] at [startIdx].
- *
- * ATX headings start with (0–3 spaces +) `#` characters followed by space/tab/EOL.
- * Everything else is a setext heading.
- */
-internal fun buildHeadingSourceMap(chars: List<Char>, startIdx: Int): SourceMap {
+// ---------------------------------------------------------------------------
+// Indented code block
+// ---------------------------------------------------------------------------
+
+private fun scanIndentedCode(
+    lines: List<Line>,
+    startIdx: Int,
+    sink: SpanSink,
+): Int {
     var i = startIdx
-    var spaces = 0
-    while (spaces < 3 && i < chars.size && chars[i] == ' ') { spaces++; i++ }
-    if (i < chars.size && chars[i] == '#') {
-        var hashes = 0
-        var j = i
-        while (j < chars.size && chars[j] == '#') { hashes++; j++ }
-        if (hashes in 1..6) {
-            val after = chars.getOrNull(j)
-            if (after == null || after == ' ' || after == '\t' || after == '\n' || after == '\r') {
-                return buildAtxHeadingSourceMap(chars, startIdx)
+    var lastContentLine = i
+
+    while (i < lines.size) {
+        val line = lines[i]
+        if (tryIndentedCodeLine(line.lexemes) != null) {
+            val range = lineRange(line.lexemes)
+            sink.emit(TokenType.CodeContent, range.start, range.end)
+            lastContentLine = i
+            i++
+        } else if (tryBlankLine(line.lexemes) != null) {
+            val range = lineRange(line.lexemes)
+            sink.emit(TokenType.CodeContent, range.start, range.end)
+            i++
+        } else {
+            break
+        }
+    }
+
+    return lastContentLine + 1
+}
+
+// ---------------------------------------------------------------------------
+// Bullet list
+// ---------------------------------------------------------------------------
+
+private fun scanBulletList(
+    lines: List<Line>,
+    startIdx: Int,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val firstStrip = tryStripBulletMarker(lines[startIdx])!!
+    val marker = firstStrip.marker
+    var i = startIdx
+
+    while (i < lines.size) {
+        val blankStart = i
+        while (i < lines.size && tryBlankLine(lines[i].lexemes) != null) i++
+        if (i >= lines.size) break
+
+        if (tryThematicBreak(lines[i].lexemes) != null && i > startIdx) break
+
+        val strip = tryStripBulletMarker(lines[i])
+        if (strip == null || strip.marker != marker) {
+            if (i > blankStart && i > startIdx) i = blankStart
+            break
+        }
+
+        emitListMarkerSpan(lines[i], sink)
+        i = scanListItemContent(lines, i, strip.contentIndent, strip.innerLine, sink, resolver)
+    }
+
+    return i
+}
+
+// ---------------------------------------------------------------------------
+// Ordered list
+// ---------------------------------------------------------------------------
+
+private fun scanOrderedList(
+    lines: List<Line>,
+    startIdx: Int,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val firstStrip = tryStripOrderedMarker(lines[startIdx])!!
+    val delimiter = firstStrip.delimiter
+    var i = startIdx
+
+    while (i < lines.size) {
+        val blankStart = i
+        while (i < lines.size && tryBlankLine(lines[i].lexemes) != null) i++
+        if (i >= lines.size) break
+
+        val strip = tryStripOrderedMarker(lines[i])
+        if (strip == null || strip.delimiter != delimiter) {
+            if (i > blankStart && i > startIdx) i = blankStart
+            break
+        }
+
+        emitListMarkerSpan(lines[i], sink)
+        i = scanListItemContent(lines, i, strip.contentIndent, strip.innerLine, sink, resolver)
+    }
+
+    return i
+}
+
+private fun emitListMarkerSpan(line: Line, sink: SpanSink) {
+    val lexemes = line.lexemes
+    var idx = 0
+    while (idx < lexemes.size) {
+        when (lexemes[idx]) {
+            is Lexeme.Space, is Lexeme.SpaceRun, is Lexeme.Tab -> idx++
+            else -> break
+        }
+    }
+    if (idx >= lexemes.size) return
+
+    val markerStart = lexemes[idx].range.start
+    when (lexemes[idx]) {
+        is Lexeme.Hyphen, is Lexeme.Plus, is Lexeme.Asterisk -> {
+            sink.emit(TokenType.ListMarker, markerStart, lexemes[idx].range.end)
+            return
+        }
+        else -> {}
+    }
+
+    if (lexemes[idx] is Lexeme.DigitRun) {
+        var end = lexemes[idx].range.end
+        if (idx + 1 < lexemes.size && (lexemes[idx + 1] is Lexeme.Period || lexemes[idx + 1] is Lexeme.ParenClose)) {
+            end = lexemes[idx + 1].range.end
+        }
+        sink.emit(TokenType.ListMarker, markerStart, end)
+    }
+}
+
+private fun scanListItemContent(
+    lines: List<Line>,
+    startIdx: Int,
+    contentIndent: Int,
+    firstInnerLine: Line,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val innerLines = mutableListOf(firstInnerLine)
+    var i = startIdx + 1
+    var hadBlank = false
+
+    while (i < lines.size) {
+        val line = lines[i]
+        if (tryBlankLine(line.lexemes) != null) {
+            if (tryBlankLine(firstInnerLine.lexemes) != null) break
+            hadBlank = true
+            innerLines.add(Line(emptyList(), "\n"))
+            i++
+            continue
+        }
+
+        val ls = leadingSpacesCount(line)
+        if (ls >= contentIndent) {
+            val stripped = stripIndent(line.lexemes, contentIndent)
+            innerLines.add(Line.from(stripped))
+            i++
+        } else if (tryStripBulletMarker(line) != null || tryStripOrderedMarker(line) != null) {
+            break
+        } else if (!hadBlank && !canInterruptParagraphLine(line)) {
+            innerLines.add(line)
+            i++
+        } else {
+            break
+        }
+    }
+
+    var j = 0
+    while (j < innerLines.size) {
+        j = scanBlockLine(innerLines, j, sink, resolver)
+    }
+
+    return i
+}
+
+// ---------------------------------------------------------------------------
+// Paragraph / Setext heading
+// ---------------------------------------------------------------------------
+
+private fun scanParagraph(
+    lines: List<Line>,
+    startIdx: Int,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val paraLines = mutableListOf<Line>()
+    var i = startIdx
+
+    paraLines.add(lines[i])
+    i++
+
+    while (i < lines.size) {
+        val line = lines[i]
+        if (tryBlankLine(line.lexemes) != null) break
+
+        // GFM Table detection: after exactly one paragraph line, check for delimiter row
+        if (paraLines.size == 1) {
+            val headerText = extractLineText(paraLines[0])
+            val delimText = extractLineText(line)
+            val table = tryTableDelimiter(headerText, delimText)
+            if (table != null) {
+                return scanTable(lines, startIdx, i, table.first, table.second, sink, resolver)
+            }
+        }
+
+        // Setext underline → heading
+        val su = trySetextUnderline(line.lexemes)
+        if (su != null) {
+            emitParagraphAsHeadingText(paraLines, sink)
+            sink.emit(TokenType.HeadingMarker, su.range.start, su.range.end)
+            emitParagraphInlines(paraLines, sink, resolver)
+            return i + 1
+        }
+
+        // Thematic break with hyphens that is also a setext underline → heading
+        val tb = tryThematicBreak(line.lexemes)
+        if (tb != null && tb.marker == '-' && trySetextUnderline(line.lexemes) != null) {
+            emitParagraphAsHeadingText(paraLines, sink)
+            sink.emit(TokenType.HeadingMarker, tb.range.start, tb.range.end)
+            emitParagraphInlines(paraLines, sink, resolver)
+            return i + 1
+        }
+        if (tb != null) break
+
+        if (canInterruptParagraphLine(line)) break
+
+        paraLines.add(line)
+        i++
+    }
+
+    // Regular paragraph — emit inline spans
+    emitParagraphInlines(paraLines, sink, resolver)
+
+    return i
+}
+
+private fun emitParagraphAsHeadingText(paraLines: List<Line>, sink: SpanSink) {
+    for (line in paraLines) {
+        val range = contentRange(line)
+        if (range != null) {
+            sink.emit(TokenType.HeadingText, range.start, range.end)
+        }
+    }
+}
+
+/**
+ * Builds a source map and raw text from paragraph lines, strips link ref defs,
+ * parses inlines, and emits inline spans.
+ */
+private fun emitParagraphInlines(
+    paraLines: List<Line>,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+) {
+    val entries = mutableListOf<SourceMap.LineMapping>()
+    val textParts = mutableListOf<String>()
+    var rawOffset = 0
+
+    for (line in paraLines) {
+        val lexemes = line.lexemes
+        if (lexemes.isEmpty()) continue
+
+        // Skip leading whitespace
+        var idx = 0
+        while (idx < lexemes.size) {
+            when (lexemes[idx]) {
+                is Lexeme.Space, is Lexeme.SpaceRun, is Lexeme.Tab -> idx++
+                else -> break
+            }
+        }
+        if (idx >= lexemes.size) continue
+
+        val contentStart = lexemes[idx].range.start
+        entries.add(SourceMap.LineMapping(rawOffset, contentStart))
+
+        var endIdx = lexemes.size
+        if (endIdx > 0 && lexemes[endIdx - 1] is Lexeme.Newline) endIdx--
+        val contentLexemes = if (idx < endIdx) lexemes.subList(idx, endIdx) else emptyList()
+        val lineText = lexemesToText(contentLexemes)
+        textParts.add(lineText)
+
+        rawOffset += lineText.length + 1
+    }
+
+    if (textParts.isEmpty()) return
+    val fullRawText = textParts.joinToString("\n")
+    val fullSourceMap = SourceMap(entries)
+
+    // Strip leading link ref defs (they consume text from the start)
+    val (_, remaining) = parseLinkRefDefs(fullRawText)
+    val trimmed = remaining.trim()
+    if (trimmed.isEmpty()) return
+
+    // Calculate the offset where the remaining text starts in the full raw text
+    val consumedLen = fullRawText.length - remaining.length
+    val leadingWs = remaining.length - remaining.trimStart().length
+    val offset = consumedLen + leadingWs
+
+    // Build a shifted source map for the trimmed text
+    val shiftedEntries = mutableListOf<SourceMap.LineMapping>()
+    for (entry in entries) {
+        val shiftedRaw = entry.rawStart - offset
+        if (shiftedRaw + (if (shiftedEntries.isEmpty()) trimmed.length else 0) >= 0) {
+            // Only include entries that map into the trimmed text range
+            if (entry.rawStart >= offset) {
+                shiftedEntries.add(SourceMap.LineMapping(entry.rawStart - offset, entry.docStart))
             }
         }
     }
-    return buildSetextHeadingSourceMap(chars, startIdx)
+    if (shiftedEntries.isEmpty() && entries.isNotEmpty()) {
+        // Fallback: use toAbsolute on the full map with the offset
+        shiftedEntries.add(SourceMap.LineMapping(0, fullSourceMap.toAbsolute(offset)))
+    }
+    val sourceMap = SourceMap(shiftedEntries)
+
+    val inlines = parseInlines(trimmed, resolver)
+    emitInlineSpans(inlines, trimmed, sourceMap, sink)
+}
+
+// ---------------------------------------------------------------------------
+// GFM Table
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the text content from a line (stripping leading whitespace and trailing newline).
+ * Equivalent to LineParser's extractParagraphText.
+ */
+private fun extractLineText(line: Line): String {
+    val lexemes = line.lexemes
+    var idx = 0
+    while (idx < lexemes.size) {
+        when (lexemes[idx]) {
+            is Lexeme.Space, is Lexeme.SpaceRun, is Lexeme.Tab -> idx++
+            else -> break
+        }
+    }
+    val content = if (idx > 0) lexemes.subList(idx, lexemes.size) else lexemes
+    var endIdx = content.size
+    if (endIdx > 0 && content[endIdx - 1] is Lexeme.Newline) endIdx--
+    return if (endIdx > 0) lexemesToText(content.subList(0, endIdx)) else ""
+}
+
+/**
+ * Tries to parse headerText + delimText as a GFM table header + delimiter.
+ * Returns (alignments, headerCells) or null.
+ */
+private fun tryTableDelimiter(headerText: String, delimText: String): Pair<List<Block.Alignment>, List<String>>? {
+    if ('|' !in delimText) return null
+    val headerCells = splitTableCells(headerText)
+    if (headerCells.isEmpty()) return null
+    val delimCells = splitTableCells(delimText)
+    if (delimCells.size != headerCells.size) return null
+    val alignments = mutableListOf<Block.Alignment>()
+    for (cell in delimCells) {
+        val alignment = parseAlignmentCell(cell) ?: return null
+        alignments.add(alignment)
+    }
+    return alignments to headerCells
+}
+
+/**
+ * Scans a GFM table, emitting spans for the header row, delimiter row, and body rows.
+ */
+private fun scanTable(
+    lines: List<Line>,
+    headerIdx: Int,
+    delimIdx: Int,
+    alignments: List<Block.Alignment>,
+    headerCells: List<String>,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+): Int {
+    val colCount = alignments.size
+
+    // Emit header row — each cell gets TableHeaderCell + inline spans
+    emitTableRowSpans(lines[headerIdx], headerCells, TokenType.TableHeaderCell, sink, resolver)
+
+    // Emit delimiter row
+    val delimRange = contentRange(lines[delimIdx])
+    if (delimRange != null) {
+        sink.emit(TokenType.TableDelimiter, delimRange.start, delimRange.end)
+    }
+
+    // Collect and emit body rows
+    var i = delimIdx + 1
+    while (i < lines.size) {
+        val line = lines[i]
+        if (tryBlankLine(line.lexemes) != null) break
+        if (canInterruptParagraphLine(line)) break
+        val rowText = extractLineText(line)
+        val rowCells = splitTableCells(rowText)
+        val normalised = (0 until colCount).map { ci -> rowCells.getOrElse(ci) { "" } }
+        emitTableRowSpans(line, normalised, TokenType.TableCell, sink, resolver)
+        i++
+    }
+
+    return i
+}
+
+/**
+ * Emits spans for a single table row (header or body).
+ * Pipes get TableDelimiter spans; segments between pipes get the specified cell token type
+ * and inline spans for any emphasis/links/etc. within cells.
+ */
+private fun emitTableRowSpans(
+    line: Line,
+    cells: List<String>,
+    cellTokenType: TokenType,
+    sink: SpanSink,
+    resolver: LinkRefResolver?,
+) {
+    val range = contentRange(line) ?: return
+    val rawText = extractLineText(line)
+    val docOffset = range.start
+
+    // Walk raw text, emitting pipe delimiters and tracking cell content regions
+    data class CellRegion(val start: Int, val end: Int, val text: String)
+    val cellRegions = mutableListOf<CellRegion>()
+    var idx = 0
+    var segStart = 0
+    var leadingPipeStripped = false
+
+    while (idx < rawText.length) {
+        when {
+            rawText[idx] == '\\' && idx + 1 < rawText.length && rawText[idx + 1] == '|' -> idx += 2
+            rawText[idx] == '`' -> {
+                var tickLen = 0
+                while (idx < rawText.length && rawText[idx] == '`') { tickLen++; idx++ }
+                val closeStart = scanClosingBackticks(rawText, idx, tickLen)
+                if (closeStart != -1) idx = closeStart + tickLen
+            }
+            rawText[idx] == '|' -> {
+                val segText = rawText.substring(segStart, idx).trim()
+                if (!leadingPipeStripped) {
+                    // First pipe — skip leading empty segment
+                    leadingPipeStripped = true
+                } else if (segText.isNotEmpty()) {
+                    // Find trimmed content position in raw text
+                    val trimStart = segStart + (rawText.substring(segStart, idx).length - rawText.substring(segStart, idx).trimStart().length)
+                    cellRegions.add(CellRegion(trimStart, trimStart + segText.length, segText))
+                }
+                sink.emit(TokenType.TableDelimiter, docOffset + idx, docOffset + idx + 1)
+                idx++
+                segStart = idx
+            }
+            else -> idx++
+        }
+    }
+    // Trailing segment after last pipe
+    val trailingText = rawText.substring(segStart).trim()
+    if (trailingText.isNotEmpty()) {
+        val trimStart = segStart + (rawText.length - segStart - rawText.substring(segStart).trimStart().length)
+        cellRegions.add(CellRegion(trimStart, trimStart + trailingText.length, trailingText))
+    }
+
+    // Emit cell token type + inline spans for each cell region
+    for (region in cellRegions) {
+        sink.emit(cellTokenType, docOffset + region.start, docOffset + region.end)
+        val inlines = parseInlines(region.text, resolver)
+        val sourceMap = SourceMap.simple(docOffset + region.start)
+        emitInlineSpans(inlines, region.text, sourceMap, sink)
+    }
+}
+
+private fun scanClosingBackticks(text: String, from: Int, tickLen: Int): Int {
+    var i = from
+    while (i < text.length) {
+        if (text[i] == '`') {
+            val start = i
+            var count = 0
+            while (i < text.length && text[i] == '`') { count++; i++ }
+            if (count == tickLen) return start
+        } else {
+            i++
+        }
+    }
+    return -1
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+private fun contentRange(line: Line): SourceRange? {
+    val lexemes = line.lexemes
+    if (lexemes.isEmpty()) return null
+
+    var start = 0
+    while (start < lexemes.size) {
+        when (lexemes[start]) {
+            is Lexeme.Space, is Lexeme.SpaceRun, is Lexeme.Tab -> start++
+            else -> break
+        }
+    }
+    if (start >= lexemes.size) return null
+
+    var end = lexemes.size
+    if (end > 0 && lexemes[end - 1] is Lexeme.Newline) end--
+    if (start >= end) return null
+
+    return SourceRange(lexemes[start].range.start, lexemes[end - 1].range.end)
+}
+
+private fun lineRange(lexemes: List<Lexeme>): SourceRange {
+    if (lexemes.isEmpty()) return SourceRange(0, 0)
+    return SourceRange(lexemes.first().range.start, lexemes.last().range.end)
+}
+
+private fun leadingSpacesCount(line: Line): Int {
+    var spaces = 0
+    for (lex in line.lexemes) {
+        when (lex) {
+            is Lexeme.Space -> spaces++
+            is Lexeme.SpaceRun -> spaces += lex.count
+            is Lexeme.Tab -> spaces += 4 - (spaces % 4)
+            else -> break
+        }
+    }
+    return spaces
+}
+
+private fun canInterruptParagraphLine(line: Line): Boolean {
+    if (tryBlankLine(line.lexemes) != null) return true
+    if (tryThematicBreak(line.lexemes) != null) return true
+    if (tryAtxHeading(line.lexemes) != null) return true
+    if (tryCodeFenceOpen(line.lexemes) != null) return true
+    if (tryStripBlockQuoteMarker(line) != null) return true
+    val htmlType = detectHtmlBlockType(line.lexemes)
+    if (htmlType in 1..6) return true
+    val bullet = tryStripBulletMarker(line)
+    if (bullet != null && tryBlankLine(bullet.innerLine.lexemes) == null) return true
+    val ordered = tryStripOrderedMarker(line)
+    if (ordered != null && ordered.number == 1 && tryBlankLine(ordered.innerLine.lexemes) == null) return true
+    return false
+}
+
+// ---------------------------------------------------------------------------
+// Extract link ref defs from raw block parse output
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts link reference definitions from raw blocks the same way
+ * DocumentParser.extractLinkRefDefs does — by parsing paragraph text
+ * for ref defs and collecting explicit LinkReferenceDefinition blocks.
+ */
+private fun extractRefDefs(blocks: List<Block>, refDefs: MutableMap<String, Pair<String, String?>>) {
+    for (block in blocks) {
+        when (block) {
+            is Block.LinkReferenceDefinition -> {
+                if (block.label !in refDefs) {
+                    refDefs[block.label] = block.destination to block.title
+                }
+            }
+            is Block.Paragraph -> {
+                // Parse ref defs from paragraph text (same as DocumentParser)
+                val text = block.inlines.joinToString("") { (it as? Inline.Text)?.literal ?: "" }
+                val (defs, _) = parseLinkRefDefs(text)
+                for (def in defs) {
+                    if (def.label !in refDefs) {
+                        refDefs[def.label] = def.destination to def.title
+                    }
+                }
+            }
+            is Block.BlockQuote -> extractRefDefs(block.blocks, refDefs)
+            is Block.BulletList -> block.items.forEach { extractRefDefs(it.blocks, refDefs) }
+            is Block.OrderedList -> block.items.forEach { extractRefDefs(it.blocks, refDefs) }
+            is Block.ListItem -> extractRefDefs(block.blocks, refDefs)
+            else -> {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // ASCII punctuation helper
 // ---------------------------------------------------------------------------
 
-/** Returns `true` if [c] is an ASCII punctuation character per CommonMark §2.4. */
 private fun isAsciiPunctuation(c: Char): Boolean =
     c in '!'..'/' || c in ':'..'@' || c in '['..'`' || c in '{'..'~'
-
-// ---------------------------------------------------------------------------
-// Task marker detection
-// ---------------------------------------------------------------------------
-
-/**
- * Detects a GFM task list marker at the start of [text].
- * Returns `(checked, endIndex)` or `null` if no valid marker found.
- */
-private fun detectTaskMarker(text: String): Pair<Boolean, Int>? {
-    if (text.length < 4) return null
-    if (text[0] != '[') return null
-    val isChecked = when (text[1]) {
-        ' ' -> false
-        'x', 'X' -> true
-        else -> return null
-    }
-    if (text[2] != ']') return null
-    if (text[3] != ' ' && text[3] != '\t') return null
-    return Pair(isChecked, 4)
-}
 
 // ---------------------------------------------------------------------------
 // Inline pass — AST-guided source walking
 // ---------------------------------------------------------------------------
 
-/**
- * Emits inline spans for all located blocks by parsing inline AST and
- * walking it against the raw source text.
- */
-internal fun scanInlines(
-    locatedBlocks: List<LocatedBlock>,
-    chars: List<Char>,
-    sink: SpanSink,
-    resolveRef: LinkRefResolver,
-) {
-    for ((block, startIdx) in locatedBlocks) {
-        processBlockInlines(block, chars, startIdx, sink, resolveRef, topLevel = true)
-    }
-}
-
-private fun processBlockInlines(
-    block: Block,
-    chars: List<Char>,
-    startIdx: Int,
-    sink: SpanSink,
-    resolveRef: LinkRefResolver,
-    topLevel: Boolean,
-) {
-    when (block) {
-        is Block.Paragraph -> {
-            val raw = extractRawContent(block.inlines) ?: return
-            if (raw.isEmpty()) return
-            val sourceMap = if (topLevel) buildParagraphSourceMap(chars, startIdx) else SourceMap.simple(0)
-            val inlines = parseAndSplitInlines(raw, resolveRef)
-            emitInlineSpans(inlines, raw, sourceMap, sink)
-        }
-        is Block.Heading -> {
-            val raw = extractRawContent(block.inlines) ?: return
-            if (raw.isEmpty()) return
-            val sourceMap = if (topLevel) buildHeadingSourceMap(chars, startIdx) else SourceMap.simple(0)
-            val inlines = parseAndSplitInlines(raw, resolveRef)
-            emitInlineSpans(inlines, raw, sourceMap, sink)
-        }
-        is Block.BlockQuote -> {
-            for (inner in block.blocks) {
-                processBlockInlines(inner, chars, startIdx, sink, resolveRef, topLevel = false)
-            }
-        }
-        is Block.BulletList -> {
-            for (item in block.items) {
-                processBlockInlines(item, chars, startIdx, sink, resolveRef, topLevel = false)
-            }
-        }
-        is Block.OrderedList -> {
-            for (item in block.items) {
-                processBlockInlines(item, chars, startIdx, sink, resolveRef, topLevel = false)
-            }
-        }
-        is Block.ListItem -> {
-            val blocks = block.blocks
-            val firstParagraphIdx = blocks.indexOfFirst { it is Block.Paragraph }
-            if (firstParagraphIdx != -1) {
-                val para = blocks[firstParagraphIdx] as Block.Paragraph
-                val raw = extractRawContent(para.inlines)
-                if (raw != null) {
-                    val taskResult = detectTaskMarker(raw)
-                    if (taskResult != null) {
-                        sink.emit(TokenType.TaskMarker, 0, 3)
-                        val stripped = raw.substring(taskResult.second)
-                        val inlines = parseAndSplitInlines(stripped, resolveRef)
-                        emitInlineSpans(inlines, stripped, SourceMap.simple(0), sink)
-                        for ((i, inner) in blocks.withIndex()) {
-                            if (i != firstParagraphIdx) {
-                                processBlockInlines(inner, chars, startIdx, sink, resolveRef, topLevel = false)
-                            }
-                        }
-                        return
-                    }
-                }
-            }
-            for (inner in blocks) {
-                processBlockInlines(inner, chars, startIdx, sink, resolveRef, topLevel = false)
-            }
-        }
-        else -> {} // Leaf blocks already have block-level spans from the block pass
-    }
-}
-
-private fun parseAndSplitInlines(raw: String, resolveRef: LinkRefResolver): List<Inline> {
-    val inlines = parseInlineContent(raw.toList(), Unit, resolveRef)
-    return splitExtendedAutolinks(inlines)
-}
-
-// ---------------------------------------------------------------------------
-// AST-guided walker — emits spans at correct absolute positions
-// ---------------------------------------------------------------------------
-
-/**
- * Walks a list of [Inline] nodes against the [raw] source text, emitting
- * highlight spans at absolute document positions via [sourceMap].
- *
- * @param inlines the inline AST nodes to walk.
- * @param raw the raw content string that the inline parser consumed.
- * @param sourceMap maps raw-content offsets to absolute document positions.
- * @param sink the span accumulator.
- * @param startPos the starting position in the raw content.
- * @return the position in the raw content after all inlines have been consumed.
- */
-internal fun emitInlineSpans(
+private fun emitInlineSpans(
     inlines: List<Inline>,
     raw: String,
     sourceMap: SourceMap,
@@ -382,22 +885,38 @@ private fun emitTextSpans(
 
     while (litIdx < literal.length && pos < raw.length) {
         if (raw[pos] == '\\' && pos + 1 < raw.length && isAsciiPunctuation(raw[pos + 1])) {
-            // Flush preceding plain text run
+            // Backslash escape: `\*` → `*`
             if (pos > textRunStart) {
                 sink.emit(TokenType.Text, sourceMap.toAbsolute(textRunStart), sourceMap.toAbsolute(pos))
             }
-            // Emit escape sequence (2 source chars → 1 literal char)
             sink.emit(TokenType.EscapeSequence, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 2))
             pos += 2
             litIdx += 1
             textRunStart = pos
+        } else if (raw[pos] == '&') {
+            // Entity reference: `&amp;` → `&`, `&#9731;` → `☃`, etc.
+            val entityLen = scanEntityLength(raw, pos)
+            if (entityLen > 0) {
+                if (pos > textRunStart) {
+                    sink.emit(TokenType.Text, sourceMap.toAbsolute(textRunStart), sourceMap.toAbsolute(pos))
+                }
+                sink.emit(TokenType.EntityRef, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + entityLen))
+                pos += entityLen
+                // The resolved character may be multiple code points (e.g. some named entities)
+                // Advance litIdx by the number of chars the entity resolved to
+                val resolvedLen = resolvedEntityCharCount(raw, pos - entityLen, literal, litIdx)
+                litIdx += resolvedLen
+                textRunStart = pos
+            } else {
+                pos += 1
+                litIdx += 1
+            }
         } else {
             pos += 1
             litIdx += 1
         }
     }
 
-    // Flush remaining plain text
     if (pos > textRunStart) {
         sink.emit(TokenType.Text, sourceMap.toAbsolute(textRunStart), sourceMap.toAbsolute(pos))
     }
@@ -405,8 +924,71 @@ private fun emitTextSpans(
     return pos
 }
 
+/**
+ * Scans a potential entity reference starting at `&` and returns its length
+ * (including the `&` and `;`), or 0 if not a valid entity.
+ */
+private fun scanEntityLength(raw: String, start: Int): Int {
+    if (start >= raw.length || raw[start] != '&') return 0
+    var i = start + 1
+    if (i >= raw.length) return 0
+
+    if (raw[i] == '#') {
+        i++
+        if (i >= raw.length) return 0
+        if (raw[i] == 'x' || raw[i] == 'X') {
+            // Hex: &#xHHHH;
+            i++
+            val hexStart = i
+            while (i < raw.length && isHexDigit(raw[i]) && i - hexStart < 6) i++
+            if (i == hexStart || i >= raw.length || raw[i] != ';') return 0
+            return i + 1 - start
+        } else {
+            // Decimal: &#DDDD;
+            val decStart = i
+            while (i < raw.length && raw[i].isDigit() && i - decStart < 7) i++
+            if (i == decStart || i >= raw.length || raw[i] != ';') return 0
+            return i + 1 - start
+        }
+    } else {
+        // Named: &name;
+        val nameStart = i
+        while (i < raw.length && raw[i].isLetterOrDigit() && i - nameStart < 31) i++
+        if (i == nameStart || i >= raw.length || raw[i] != ';') return 0
+        val name = raw.substring(nameStart, i)
+        // Check it's a known entity
+        if (parsek.markdown.parser.HTML5_ENTITIES[name] != null) {
+            return i + 1 - start
+        }
+        return 0
+    }
+}
+
+private fun isHexDigit(c: Char): Boolean =
+    c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+/**
+ * Determines how many characters in [literal] starting at [litIdx] were produced
+ * by resolving the entity at [entityStart] in [raw].
+ */
+private fun resolvedEntityCharCount(raw: String, entityStart: Int, literal: String, litIdx: Int): Int {
+    // Most entities resolve to a single character, but some named entities
+    // resolve to two characters (e.g. &fjlig; → fj). We figure out the
+    // resolved string length by re-resolving.
+    var i = entityStart + 1
+    if (i >= raw.length) return 1
+    if (raw[i] == '#') {
+        return 1 // numeric references always resolve to 1 char (or replacement char)
+    }
+    val nameStart = i
+    while (i < raw.length && raw[i] != ';') i++
+    val name = raw.substring(nameStart, i)
+    val resolved = parsek.markdown.parser.HTML5_ENTITIES[name]
+    return resolved?.length ?: 1
+}
+
 // ---------------------------------------------------------------------------
-// Soft break — optional space/tab + newline
+// Soft break
 // ---------------------------------------------------------------------------
 
 private fun emitSoftBreakSpan(
@@ -417,16 +999,14 @@ private fun emitSoftBreakSpan(
 ): Int {
     var pos = startPos
     val start = pos
-    // Skip optional trailing space/tab (pLineBreak consumes at most 1)
     if (pos < raw.length && (raw[pos] == ' ' || raw[pos] == '\t')) pos++
-    // Skip the line ending
     if (pos < raw.length && raw[pos] == '\n') pos++
     sink.emit(TokenType.SoftBreak, sourceMap.toAbsolute(start), sourceMap.toAbsolute(pos))
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Hard break — (2+ spaces | backslash) + newline
+// Hard break
 // ---------------------------------------------------------------------------
 
 private fun emitHardBreakSpan(
@@ -437,20 +1017,18 @@ private fun emitHardBreakSpan(
 ): Int {
     var pos = startPos
     val start = pos
-    // Skip spaces or backslash before the newline
     if (pos < raw.length && raw[pos] == '\\') {
         pos++
     } else {
         while (pos < raw.length && raw[pos] == ' ') pos++
     }
-    // Skip the line ending
     if (pos < raw.length && raw[pos] == '\n') pos++
     sink.emit(TokenType.HardBreak, sourceMap.toAbsolute(start), sourceMap.toAbsolute(pos))
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Code span — backtick delimiters + content
+// Code span
 // ---------------------------------------------------------------------------
 
 private fun emitCodeSpanSpans(
@@ -462,33 +1040,24 @@ private fun emitCodeSpanSpans(
 ): Int {
     var pos = startPos
 
-    // Count opening backtick run
     var runLen = 0
     while (pos + runLen < raw.length && raw[pos + runLen] == '`') runLen++
 
-    // Emit opening delimiter
     sink.emit(TokenType.CodeSpanDelimiter, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + runLen))
     pos += runLen
 
-    // Find closing backtick run of the same length
     val contentStart = pos
     val contentEnd = findClosingBackticks(raw, pos, runLen)
 
-    // Emit content
     sink.emit(TokenType.CodeSpanContent, sourceMap.toAbsolute(contentStart), sourceMap.toAbsolute(contentEnd))
     pos = contentEnd
 
-    // Emit closing delimiter
     sink.emit(TokenType.CodeSpanDelimiter, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + runLen))
     pos += runLen
 
     return pos
 }
 
-/**
- * Scans forward from [startPos] looking for a closing backtick run of exactly
- * [runLen] backticks. Returns the index of the first backtick in the closing run.
- */
 private fun findClosingBackticks(raw: String, startPos: Int, runLen: Int): Int {
     var i = startPos
     while (i < raw.length) {
@@ -500,11 +1069,11 @@ private fun findClosingBackticks(raw: String, startPos: Int, runLen: Int): Int {
             i++
         }
     }
-    return raw.length // shouldn't happen if AST parsed correctly
+    return raw.length
 }
 
 // ---------------------------------------------------------------------------
-// Emphasis — * or _ delimiters (1 char each)
+// Emphasis
 // ---------------------------------------------------------------------------
 
 private fun emitEmphasisSpans(
@@ -515,23 +1084,16 @@ private fun emitEmphasisSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // Opening marker (1 char)
     sink.emit(TokenType.EmphasisMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Recurse children
     pos = emitInlineSpans(emphasis.children, raw, sourceMap, sink, pos)
-
-    // Closing marker (1 char)
     sink.emit(TokenType.EmphasisMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Strong emphasis — ** or __ delimiters (2 chars each)
+// Strong emphasis
 // ---------------------------------------------------------------------------
 
 private fun emitStrongEmphasisSpans(
@@ -542,23 +1104,16 @@ private fun emitStrongEmphasisSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // Opening marker (2 chars)
     sink.emit(TokenType.StrongMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 2))
     pos += 2
-
-    // Recurse children
     pos = emitInlineSpans(strong.children, raw, sourceMap, sink, pos)
-
-    // Closing marker (2 chars)
     sink.emit(TokenType.StrongMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 2))
     pos += 2
-
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Strikethrough — ~~ delimiters (2 chars each)
+// Strikethrough
 // ---------------------------------------------------------------------------
 
 private fun emitStrikethroughSpans(
@@ -569,23 +1124,16 @@ private fun emitStrikethroughSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // Opening marker (2 chars)
     sink.emit(TokenType.StrikethroughMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 2))
     pos += 2
-
-    // Recurse children
     pos = emitInlineSpans(strikethrough.children, raw, sourceMap, sink, pos)
-
-    // Closing marker (2 chars)
     sink.emit(TokenType.StrikethroughMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 2))
     pos += 2
-
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Link — [children](url "title") or [children][ref] or [children]
+// Link
 // ---------------------------------------------------------------------------
 
 private fun emitLinkSpans(
@@ -596,26 +1144,17 @@ private fun emitLinkSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // Opening [
     sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Recurse children
     pos = emitInlineSpans(link.children, raw, sourceMap, sink, pos)
-
-    // Closing ]
     sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Check suffix
     pos = emitLinkSuffix(raw, sourceMap, sink, pos)
-
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Image — ![alt](url "title") or ![alt][ref] or ![alt]
+// Image
 // ---------------------------------------------------------------------------
 
 private fun emitImageSpans(
@@ -626,30 +1165,19 @@ private fun emitImageSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // ! prefix
     sink.emit(TokenType.ImageMarker, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Opening [
     sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Recurse children (alt text inlines)
     pos = emitInlineSpans(image.children, raw, sourceMap, sink, pos)
-
-    // Closing ]
     sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Check suffix
     pos = emitLinkSuffix(raw, sourceMap, sink, pos)
-
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Link/Image suffix — inline (url), reference [ref], or shortcut
+// Link/Image suffix
 // ---------------------------------------------------------------------------
 
 private fun emitLinkSuffix(
@@ -662,7 +1190,7 @@ private fun emitLinkSuffix(
     return when (raw[startPos]) {
         '(' -> emitInlineLinkSuffix(raw, sourceMap, sink, startPos)
         '[' -> emitReferenceLinkSuffix(raw, sourceMap, sink, startPos)
-        else -> startPos // shortcut reference — no suffix
+        else -> startPos
     }
 }
 
@@ -673,48 +1201,86 @@ private fun emitInlineLinkSuffix(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // (
     sink.emit(TokenType.LinkParen, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Optional whitespace (including newlines)
     pos = skipLinkWhitespace(raw, pos)
 
-    // Destination (if not immediately at closing paren)
     if (pos < raw.length && raw[pos] != ')') {
-        val destResult = parseLinkDestination(raw.toList(), pos)
-        if (destResult != null) {
-            val (_, afterDest) = destResult
-            sink.emit(TokenType.LinkDestination, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(afterDest))
-            pos = afterDest
+        val destEnd = scanLinkDestination(raw, pos)
+        if (destEnd != null && destEnd > pos) {
+            sink.emit(TokenType.LinkDestination, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(destEnd))
+            pos = destEnd
         }
 
-        // Optional whitespace
-        val posBeforeWs = pos
         pos = skipLinkWhitespace(raw, pos)
 
-        // Optional title
         if (pos < raw.length && (raw[pos] == '"' || raw[pos] == '\'' || raw[pos] == '(')) {
-            val titleResult = parseLinkTitle(raw.toList(), pos)
-            if (titleResult != null) {
-                val (_, afterTitle) = titleResult
-                sink.emit(TokenType.LinkTitle, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(afterTitle))
-                pos = afterTitle
+            val titleEnd = scanLinkTitle(raw, pos)
+            if (titleEnd != null && titleEnd > pos) {
+                sink.emit(TokenType.LinkTitle, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(titleEnd))
+                pos = titleEnd
             }
         }
 
-        // Optional whitespace before closing paren
         pos = skipLinkWhitespace(raw, pos)
     }
 
-    // )
     if (pos < raw.length && raw[pos] == ')') {
         sink.emit(TokenType.LinkParen, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
         pos += 1
     }
 
     return pos
+}
+
+private fun scanLinkDestination(raw: String, pos: Int): Int? {
+    if (pos >= raw.length) return null
+    if (raw[pos] == '<') {
+        var i = pos + 1
+        while (i < raw.length) {
+            when (raw[i]) {
+                '>' -> return i + 1
+                '<' -> return null
+                '\\' -> { i += 2; continue }
+                '\n' -> return null
+                else -> i++
+            }
+        }
+        return null
+    }
+    var i = pos
+    var depth = 0
+    while (i < raw.length) {
+        val c = raw[i]
+        when {
+            c == '(' -> { depth++; i++ }
+            c == ')' -> { if (depth == 0) return i; depth--; i++ }
+            c == '\\' && i + 1 < raw.length -> i += 2
+            c <= ' ' -> return i
+            else -> i++
+        }
+    }
+    return i
+}
+
+private fun scanLinkTitle(raw: String, pos: Int): Int? {
+    if (pos >= raw.length) return null
+    val open = raw[pos]
+    val close = when (open) {
+        '"' -> '"'
+        '\'' -> '\''
+        '(' -> ')'
+        else -> return null
+    }
+    var i = pos + 1
+    while (i < raw.length) {
+        when (raw[i]) {
+            close -> return i + 1
+            '\\' -> i += 2
+            else -> i++
+        }
+    }
+    return null
 }
 
 private fun emitReferenceLinkSuffix(
@@ -724,20 +1290,13 @@ private fun emitReferenceLinkSuffix(
     startPos: Int,
 ): Int {
     var pos = startPos
-
-    // [
     sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
     pos += 1
-
-    // Scan to closing ]
     while (pos < raw.length && raw[pos] != ']') pos++
-
-    // ]
     if (pos < raw.length) {
         sink.emit(TokenType.LinkBracket, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + 1))
         pos += 1
     }
-
     return pos
 }
 
@@ -748,7 +1307,7 @@ private fun skipLinkWhitespace(raw: String, pos: Int): Int {
 }
 
 // ---------------------------------------------------------------------------
-// Autolink — <url>
+// Autolink
 // ---------------------------------------------------------------------------
 
 private fun emitAutolinkSpans(
@@ -759,19 +1318,20 @@ private fun emitAutolinkSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
-    // Skip <
+    // Skip opening '<'
     pos += 1
-    // URL content
-    val urlEnd = pos + autolink.url.length
-    sink.emit(TokenType.AutolinkUrl, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(urlEnd))
-    pos = urlEnd
-    // Skip >
-    pos += 1
+    // Find the closing '>' in raw text — don't use autolink.url.length because
+    // email autolinks have a "mailto:" prefix added by the parser that isn't in the source.
+    val urlStart = pos
+    while (pos < raw.length && raw[pos] != '>') pos++
+    sink.emit(TokenType.AutolinkUrl, sourceMap.toAbsolute(urlStart), sourceMap.toAbsolute(pos))
+    // Skip closing '>'
+    if (pos < raw.length) pos += 1
     return pos
 }
 
 // ---------------------------------------------------------------------------
-// Raw HTML — inline HTML tag
+// Raw HTML
 // ---------------------------------------------------------------------------
 
 private fun emitRawHtmlSpan(
@@ -787,7 +1347,7 @@ private fun emitRawHtmlSpan(
 }
 
 // ---------------------------------------------------------------------------
-// HTML entity — &amp; &#42; &#x2A; etc.
+// HTML entity
 // ---------------------------------------------------------------------------
 
 private fun emitHtmlEntitySpan(
@@ -796,14 +1356,13 @@ private fun emitHtmlEntitySpan(
     sink: SpanSink,
     startPos: Int,
 ): Int {
-    // HtmlEntity.literal stores the full original text (e.g. "&amp;")
     val len = entity.literal.length
     sink.emit(TokenType.EntityRef, sourceMap.toAbsolute(startPos), sourceMap.toAbsolute(startPos + len))
     return startPos + len
 }
 
 // ---------------------------------------------------------------------------
-// Extended autolink — bare URL (GFM)
+// Extended autolink
 // ---------------------------------------------------------------------------
 
 private fun emitExtendedAutolinkSpan(
@@ -822,51 +1381,7 @@ private fun emitExtendedAutolinkSpan(
 }
 
 private fun computeExtendedAutolinkSourceLength(url: String): Int = when {
-    url.startsWith("http://www.") -> url.length - 7  // "http://" was prepended to "www.…"
-    url.startsWith("mailto:") -> url.length - 7       // "mailto:" was prepended
-    else -> url.length                                  // URL autolinks have the scheme in source
-}
-
-// ---------------------------------------------------------------------------
-// scanDocument — top-level entry point
-// ---------------------------------------------------------------------------
-
-/**
- * Scans a markdown document and returns a flat list of [Span]s with
- * absolute document offsets for top-level paragraphs and headings.
- *
- * This is the efficient alternative to [pDocumentHighlight] for consumers
- * that only need token positions (e.g. syntax highlighting in editors).
- * Unlike [pDocumentHighlight], the returned [Span]s for top-level inline
- * content use absolute document offsets instead of 0-based paragraph-relative
- * offsets.
- *
- * The inline pass uses AST-guided source walking: inline content is parsed
- * into an AST, then the AST is walked against the raw source text to emit
- * spans at correct absolute positions. This avoids the position corruption
- * that occurs with recursive highlight parsers and bulk span shifting.
- *
- * **Phase 1 limitation**: inline spans inside container blocks (blockquotes,
- * list items) remain at container-relative offsets.
- */
-fun scanDocument(text: String): List<Span> {
-    val chars = text.toList()
-    val sink = SpanSink()
-    val input = ParserInput.of(chars, sink)
-
-    // Block pass: parse blocks, emit block-level spans, capture start indices
-    val blockResult = pMany(pLocatedBlockHighlight())(input) as Success
-    val locatedBlocks = blockResult.value
-
-    // Collect link reference definitions for inline resolution
-    val refMap = mutableMapOf<String, Pair<String, String?>>()
-    for ((block, _) in locatedBlocks) {
-        collectLinkRefDefs(block, refMap)
-    }
-    val resolveRef: LinkRefResolver = { refMap[it] }
-
-    // Inline pass: AST-guided source walking with absolute offsets
-    scanInlines(locatedBlocks, chars, sink, resolveRef)
-
-    return sink.spans
+    url.startsWith("http://www.") -> url.length - 7
+    url.startsWith("mailto:") -> url.length - 7
+    else -> url.length
 }

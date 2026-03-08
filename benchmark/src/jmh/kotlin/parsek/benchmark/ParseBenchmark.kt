@@ -1,10 +1,8 @@
 package parsek.benchmark
 
 import org.openjdk.jmh.annotations.*
-import parsek.ParserInput
-import parsek.markdown.highlight.SpanSink
-import parsek.markdown.parser.pDocument
-import parsek.markdown.highlight.pDocumentHighlight
+import parsek.markdown.parser.parseDocument
+import parsek.markdown.highlight.scanDocument
 import java.util.concurrent.TimeUnit
 
 @State(Scope.Benchmark)
@@ -72,8 +70,7 @@ open class ParseBenchmark {
     fun parseAllSpecExamples(): Int {
         var count = 0
         for (ex in specExamples) {
-            val input = ParserInput.of(ex.markdown.toList(), Unit)
-            pDocument<Unit>()(input)
+            parseDocument(ex.markdown)
             count++
         }
         return count
@@ -81,20 +78,16 @@ open class ParseBenchmark {
 
     @Benchmark
     fun parseSampleDocument(): Any? {
-        val input = ParserInput.of(sampleDocument.toList(), Unit)
-        return pDocument<Unit>()(input)
+        return parseDocument(sampleDocument)
     }
 
     @Benchmark
-    fun parseHighlightDocument(): Any? {
-        val sink = SpanSink()
-        val input = ParserInput.of(sampleDocument.toList(), sink)
-        return pDocumentHighlight()(input)
+    fun highlightSampleDocument(): Any? {
+        return scanDocument(sampleDocument)
     }
 
     @Benchmark
     fun parseLargeDocument(): Any? {
-        val input = ParserInput.of(largeDocument.toList(), Unit)
-        return pDocument<Unit>()(input)
+        return parseDocument(largeDocument)
     }
 }

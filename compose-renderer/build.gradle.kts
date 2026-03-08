@@ -22,7 +22,6 @@ kotlin {
         commonMain.dependencies {
             implementation(project(":core"))
             implementation(project(":markdown"))
-            implementation(project(":markdown2"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)

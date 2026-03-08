@@ -20,7 +20,7 @@ import androidx.compose.ui.window.application
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.request.crossfade
-import parsek.markdown2.parser.parseDocument
+import parsek.markdown.parser.parseDocument
 
 private fun loadResource(path: String): String =
     Thread.currentThread().contextClassLoader

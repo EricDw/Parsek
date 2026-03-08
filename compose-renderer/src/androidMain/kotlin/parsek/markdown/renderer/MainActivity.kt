@@ -14,8 +14,8 @@ import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.request.crossfade
-import parsek.markdown2.highlight.scanDocument
-import parsek.markdown2.parser.parseDocument
+import parsek.markdown.highlight.scanDocument
+import parsek.markdown.parser.parseDocument
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
