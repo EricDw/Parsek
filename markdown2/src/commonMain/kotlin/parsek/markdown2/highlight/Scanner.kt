@@ -28,18 +28,18 @@ import parsek.markdown2.parser.*
 fun scanDocument(text: String): List<Span> {
     val sink = SpanSink()
 
-    // Stage 1: Parse document for link ref defs
-    val document = parseDocument(text)
-    val refDefs = mutableMapOf<String, Pair<String, String?>>()
-    collectRefDefs(document.blocks, refDefs)
-    val resolver: LinkRefResolver? = if (refDefs.isNotEmpty()) {
-        { label -> refDefs[label] }
-    } else null
-
-    // Stage 2: Scan into lexemes and split into lines
+    // Stage 1: Scan into lexemes and split into lines
     val lexemes = parsek.markdown2.scanner.scanDocument(text)
     val rawLines = splitLines(lexemes)
     val lines = rawLines.map { Line.from(it) }
+
+    // Stage 2: Parse blocks, then extract ref defs from raw blocks (before they're consumed)
+    val blocks = parseLines(lines)
+    val refDefs = mutableMapOf<String, Pair<String, String?>>()
+    extractRefDefs(blocks, refDefs)
+    val resolver: LinkRefResolver? = if (refDefs.isNotEmpty()) {
+        { label -> refDefs[label] }
+    } else null
 
     // Stage 3: Walk lines emitting both block and inline spans
     scanBlockSpans(lines, sink, resolver)
@@ -785,10 +785,15 @@ private fun canInterruptParagraphLine(line: Line): Boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Collect link ref defs from parsed document
+// Extract link ref defs from raw block parse output
 // ---------------------------------------------------------------------------
 
-private fun collectRefDefs(blocks: List<Block>, refDefs: MutableMap<String, Pair<String, String?>>) {
+/**
+ * Extracts link reference definitions from raw blocks the same way
+ * DocumentParser.extractLinkRefDefs does — by parsing paragraph text
+ * for ref defs and collecting explicit LinkReferenceDefinition blocks.
+ */
+private fun extractRefDefs(blocks: List<Block>, refDefs: MutableMap<String, Pair<String, String?>>) {
     for (block in blocks) {
         when (block) {
             is Block.LinkReferenceDefinition -> {
@@ -796,10 +801,20 @@ private fun collectRefDefs(blocks: List<Block>, refDefs: MutableMap<String, Pair
                     refDefs[block.label] = block.destination to block.title
                 }
             }
-            is Block.BlockQuote -> collectRefDefs(block.blocks, refDefs)
-            is Block.BulletList -> block.items.forEach { collectRefDefs(it.blocks, refDefs) }
-            is Block.OrderedList -> block.items.forEach { collectRefDefs(it.blocks, refDefs) }
-            is Block.ListItem -> collectRefDefs(block.blocks, refDefs)
+            is Block.Paragraph -> {
+                // Parse ref defs from paragraph text (same as DocumentParser)
+                val text = block.inlines.joinToString("") { (it as? Inline.Text)?.literal ?: "" }
+                val (defs, _) = parseLinkRefDefs(text)
+                for (def in defs) {
+                    if (def.label !in refDefs) {
+                        refDefs[def.label] = def.destination to def.title
+                    }
+                }
+            }
+            is Block.BlockQuote -> extractRefDefs(block.blocks, refDefs)
+            is Block.BulletList -> block.items.forEach { extractRefDefs(it.blocks, refDefs) }
+            is Block.OrderedList -> block.items.forEach { extractRefDefs(it.blocks, refDefs) }
+            is Block.ListItem -> extractRefDefs(block.blocks, refDefs)
             else -> {}
         }
     }
@@ -870,6 +885,7 @@ private fun emitTextSpans(
 
     while (litIdx < literal.length && pos < raw.length) {
         if (raw[pos] == '\\' && pos + 1 < raw.length && isAsciiPunctuation(raw[pos + 1])) {
+            // Backslash escape: `\*` → `*`
             if (pos > textRunStart) {
                 sink.emit(TokenType.Text, sourceMap.toAbsolute(textRunStart), sourceMap.toAbsolute(pos))
             }
@@ -877,6 +893,24 @@ private fun emitTextSpans(
             pos += 2
             litIdx += 1
             textRunStart = pos
+        } else if (raw[pos] == '&') {
+            // Entity reference: `&amp;` → `&`, `&#9731;` → `☃`, etc.
+            val entityLen = scanEntityLength(raw, pos)
+            if (entityLen > 0) {
+                if (pos > textRunStart) {
+                    sink.emit(TokenType.Text, sourceMap.toAbsolute(textRunStart), sourceMap.toAbsolute(pos))
+                }
+                sink.emit(TokenType.EntityRef, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(pos + entityLen))
+                pos += entityLen
+                // The resolved character may be multiple code points (e.g. some named entities)
+                // Advance litIdx by the number of chars the entity resolved to
+                val resolvedLen = resolvedEntityCharCount(raw, pos - entityLen, literal, litIdx)
+                litIdx += resolvedLen
+                textRunStart = pos
+            } else {
+                pos += 1
+                litIdx += 1
+            }
         } else {
             pos += 1
             litIdx += 1
@@ -888,6 +922,69 @@ private fun emitTextSpans(
     }
 
     return pos
+}
+
+/**
+ * Scans a potential entity reference starting at `&` and returns its length
+ * (including the `&` and `;`), or 0 if not a valid entity.
+ */
+private fun scanEntityLength(raw: String, start: Int): Int {
+    if (start >= raw.length || raw[start] != '&') return 0
+    var i = start + 1
+    if (i >= raw.length) return 0
+
+    if (raw[i] == '#') {
+        i++
+        if (i >= raw.length) return 0
+        if (raw[i] == 'x' || raw[i] == 'X') {
+            // Hex: &#xHHHH;
+            i++
+            val hexStart = i
+            while (i < raw.length && isHexDigit(raw[i]) && i - hexStart < 6) i++
+            if (i == hexStart || i >= raw.length || raw[i] != ';') return 0
+            return i + 1 - start
+        } else {
+            // Decimal: &#DDDD;
+            val decStart = i
+            while (i < raw.length && raw[i].isDigit() && i - decStart < 7) i++
+            if (i == decStart || i >= raw.length || raw[i] != ';') return 0
+            return i + 1 - start
+        }
+    } else {
+        // Named: &name;
+        val nameStart = i
+        while (i < raw.length && raw[i].isLetterOrDigit() && i - nameStart < 31) i++
+        if (i == nameStart || i >= raw.length || raw[i] != ';') return 0
+        val name = raw.substring(nameStart, i)
+        // Check it's a known entity
+        if (parsek.markdown2.parser.HTML5_ENTITIES[name] != null) {
+            return i + 1 - start
+        }
+        return 0
+    }
+}
+
+private fun isHexDigit(c: Char): Boolean =
+    c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+/**
+ * Determines how many characters in [literal] starting at [litIdx] were produced
+ * by resolving the entity at [entityStart] in [raw].
+ */
+private fun resolvedEntityCharCount(raw: String, entityStart: Int, literal: String, litIdx: Int): Int {
+    // Most entities resolve to a single character, but some named entities
+    // resolve to two characters (e.g. &fjlig; → fj). We figure out the
+    // resolved string length by re-resolving.
+    var i = entityStart + 1
+    if (i >= raw.length) return 1
+    if (raw[i] == '#') {
+        return 1 // numeric references always resolve to 1 char (or replacement char)
+    }
+    val nameStart = i
+    while (i < raw.length && raw[i] != ';') i++
+    val name = raw.substring(nameStart, i)
+    val resolved = parsek.markdown2.parser.HTML5_ENTITIES[name]
+    return resolved?.length ?: 1
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,11 +1318,15 @@ private fun emitAutolinkSpans(
     startPos: Int,
 ): Int {
     var pos = startPos
+    // Skip opening '<'
     pos += 1
-    val urlEnd = pos + autolink.url.length
-    sink.emit(TokenType.AutolinkUrl, sourceMap.toAbsolute(pos), sourceMap.toAbsolute(urlEnd))
-    pos = urlEnd
-    pos += 1
+    // Find the closing '>' in raw text — don't use autolink.url.length because
+    // email autolinks have a "mailto:" prefix added by the parser that isn't in the source.
+    val urlStart = pos
+    while (pos < raw.length && raw[pos] != '>') pos++
+    sink.emit(TokenType.AutolinkUrl, sourceMap.toAbsolute(urlStart), sourceMap.toAbsolute(pos))
+    // Skip closing '>'
+    if (pos < raw.length) pos += 1
     return pos
 }
 
