@@ -1,161 +1,151 @@
 # Parsek
 
-A Kotlin Multiplatform parser combinator library — with a CommonMark 0.31.2
-parser and GitHub Flavoured Markdown (GFM) extensions built on top.
+A Kotlin Multiplatform parser combinator library — compose small parsers into
+complex ones with type-safe, functional combinators.
+
+Built on top: a **CommonMark 0.31.2** parser with all five **GitHub Flavoured
+Markdown (GFM)** extensions, syntax highlighting, and a Compose Multiplatform
+renderer.
+
+## Installation
+
+Clone the repository and publish to your local Maven repository:
+
+```bash
+git clone https://github.com/EricDw/Parsek.git
+cd parsek
+./gradlew publishToMavenLocal
+```
+
+Then add the dependencies you need in your `build.gradle.kts`:
+
+```kotlin
+repositories {
+    mavenLocal()
+}
+
+dependencies {
+    // Parser combinators
+    implementation("com.dewildte.parsek:parsek-core:0.1.0")
+
+    // Character/string parsers (includes :core)
+    implementation("com.dewildte.parsek:parsek-text:0.1.0")
+
+    // CommonMark + GFM markdown parser (includes :core and :text)
+    implementation("com.dewildte.parsek:parsek-markdown:0.1.0")
+}
+```
+
+## Quick Start
+
+### Parse with combinators
+
+```kotlin
+import parsek.*
+import parsek.text.*
+
+// Match a greeting like "Hello, World!"
+val greeting = pString("Hello, ") + pMany1(pSatisfy { it.isLetter() }) + pChar('!')
+
+val input = ParserInput.of("Hello, World!".toList(), Unit)
+when (val result = greeting(input)) {
+    is Success -> println(result.value) // Pair(Pair("Hello, ", [W, o, r, l, d]), !)
+    is Failure -> println(result.message)
+}
+```
+
+### Combine and transform
+
+```kotlin
+import parsek.*
+import parsek.text.*
+
+// Parse an integer and double it
+val number = pInt<Unit>().map { it * 2 }
+
+val input = ParserInput.of("42".toList(), Unit)
+when (val result = number(input)) {
+    is Success -> println(result.value) // 84
+    is Failure -> println(result.message)
+}
+```
+
+### Parse Markdown
+
+```kotlin
+import parsek.markdown.parser.parseDocument
+
+val doc = parseDocument("# Hello **world**")
+println(doc.blocks) // [Heading(level=1, inlines=[Text("Hello "), StrongEmphasis([Text("world")])])]
+```
+
+### Syntax highlighting
+
+```kotlin
+import parsek.markdown.highlight.scanDocument
+
+val spans = scanDocument("# Hello **world**")
+spans.forEach { println("${it.type} [${it.start}..${it.end})") }
+// HeadingMarker [0..2)
+// Heading1 [0..17)
+// StrongDelimiter [8..10)
+// StrongContent [10..15)
+// StrongDelimiter [15..17)
+```
 
 ## Modules
 
 | Module | Artifact | Description |
 |---|---|---|
-| `:core` | `com.dewildte.parsek:parsek-core` | Generic `Parser<I, O, U>` type and combinators |
-| `:text` | `com.dewildte.parsek:parsek-text` | Character/string parsers; depends on `:core` |
-| `:markdown` | `com.dewildte.parsek:parsek-markdown` | CommonMark 0.31.2 + GFM extensions parser (96.3% CommonMark, 100% GFM spec compliance) |
-| `:compose-renderer` | — | Compose Multiplatform markdown renderer with GFM support (JVM + Android) |
-| `:benchmark` | — | JMH benchmarks and profiling runner (JVM-only) |
+| `:core` | `parsek-core` | Generic `Parser<I, O, U>` type and combinators |
+| `:text` | `parsek-text` | Character/string parsers (`pChar`, `pString`, `pInt`) |
+| `:markdown` | `parsek-markdown` | CommonMark 0.31.2 + GFM parser, AST, and syntax highlighting |
+| `:compose-renderer` | — | Compose Multiplatform markdown renderer (JVM + Android) |
+| `:benchmark` | — | JMH benchmarks (JVM-only) |
 
-## Overview
-
-Parsek is built around three core types:
-
-- **`ParserInput<I, U>`** — a position-aware, immutable wrapper around any list of tokens, with an optional user-context value of type `U`
-- **`ParseResult<I, O, U>`** — a sealed result: `Success` (value + next index) or `Failure` (message + index)
-- **`Parser<I, O, U>`** — a functional interface `(ParserInput<I, U>) -> ParseResult<I, O, U>`
-
-The input type `I`, output type `O`, and user-context type `U` are all independent, so parsers can transform tokens into any type while threading arbitrary state through the parse.
-
-## CommonMark + GFM
-
-The `:markdown` module implements the [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) specification with all five [GitHub Flavoured Markdown](https://github.github.com/gfm/) extensions, using a **two-pass design**:
-
-1. **Block pass** — parses the input into block-level structure (headings, code blocks, lists, block quotes, tables, etc.) and collects link reference definitions.
-2. **Inline pass** — re-parses inline content within paragraphs, headings, and table cells, resolving link references and applying GFM extensions (strikethrough, extended autolinks, task list markers).
-
-### GFM Extensions
-
-| Extension | Description |
-|-----------|-------------|
-| Tables | Pipe-separated tables with column alignment (`\|---\|:---:\|---:\|`) |
-| Strikethrough | `~~deleted text~~` produces strikethrough formatting |
-| Task list items | `- [x] done` / `- [ ] todo` checkbox markers in list items |
-| Extended autolinks | Bare URLs (`https://...`, `www.…`) and emails auto-linked |
-| Disallowed raw HTML | Filters `<script>`, `<style>`, etc. in rendered output |
-
-### AST
-
-The parser produces a `Document` containing a tree of `Block` and `Inline` nodes:
-
-- **Blocks:** `Heading`, `Paragraph`, `FencedCodeBlock`, `IndentedCodeBlock`, `HtmlBlock`, `BlockQuote`, `BulletList`, `OrderedList`, `ListItem`, `ThematicBreak`, `LinkReferenceDefinition`, `BlankLine`, `Table`, `TableRow`, `TableCell`
-- **Inlines:** `Text`, `Emphasis`, `StrongEmphasis`, `CodeSpan`, `Link`, `Image`, `Autolink`, `RawHtml`, `HtmlEntity`, `HardBreak`, `SoftBreak`, `Strikethrough`, `ExtendedAutolink`
-
-### Syntax highlighting
-
-The `parsek.markdown.highlight` package provides a `SpanSink` that collects token-level highlight spans during parsing:
-
-```kotlin
-import parsek.*
-import parsek.markdown.highlight.*
-
-val markdown = "# Hello **world**"
-val sink = SpanSink()
-val input = ParserInput.of(markdown.toList(), sink)
-
-when (val result = pDocumentHighlight()(input)) {
-    is Success -> {
-        val document = result.value      // parsed AST
-        val highlights = sink.spans      // List<Span> with TokenType, start, end
-    }
-    is Failure -> println(result.message)
-}
-```
-
-There are 30 `TokenType` values covering block markers, inline delimiters, content regions, escapes, and GFM extensions.
-
-## Targets
+## Platforms
 
 | Platform | Targets |
 |---|---|
 | JVM | `jvm` |
 | JavaScript | `js` (browser + Node.js) |
 | macOS | `macosArm64`, `macosX64` |
+| iOS | `iosArm64`, `iosSimulatorArm64` |
 | Linux | `linuxX64` |
 | Windows | `mingwX64` |
 | WASM | `wasmJs`, `wasmWasi` |
 
-The `:compose-renderer` module targets JVM and Android only. The `:benchmark` module targets JVM only.
+## Spec Compliance
 
-## Usage
+- **CommonMark 0.31.2:** 652/652 (100%)
+- **GFM extensions:** 24/24 (100%) — tables, strikethrough, task lists, autolinks, disallowed HTML
 
-### `pSatisfy` (`:core`)
+## API Docs
 
-Consumes one element from the input if it matches a predicate.
+Full KDoc API documentation is available on [GitHub Pages](https://ericdw.github.io/Parsek/).
 
-```kotlin
-import parsek.*
+To generate locally:
 
-val isDigit: Parser<Char, Char, Unit> = pSatisfy { it.isDigit() }
-
-val input = ParserInput.of("123".toList())
-when (val result = isDigit(input)) {
-    is Success -> println(result.value)   // '1'
-    is Failure -> println(result.message)
-}
-```
-
-### `pChar` (`:text`)
-
-Matches a specific character.
-
-```kotlin
-import parsek.text.pChar
-
-val excl: Parser<Char, Char, Unit> = pChar('!')
-```
-
-### `pDocument` (`:markdown`)
-
-Parses a complete CommonMark document.
-
-```kotlin
-import parsek.*
-import parsek.markdown.parser.pDocument
-
-val markdown = """
-    # Parsek
-
-    A **parser combinator** library for Kotlin Multiplatform.
-
-    - Composable
-    - Type-safe
-    - Cross-platform
-""".trimIndent()
-
-val input = ParserInput.of(markdown.toList())
-when (val result = pDocument<Unit>()(input)) {
-    is Success -> println(result.value) // Document(blocks=[Heading(...), Paragraph(...), BulletList(...)])
-    is Failure -> println(result.message)
-}
+```bash
+./gradlew dokkaHtmlMultiModule
+open build/dokka/htmlMultiModule/index.html
 ```
 
 ## Building
 
 ```bash
-# Full build
-./gradlew build
-
-# Run tests per module (JVM fast path)
+# Run tests (JVM — fast)
 ./gradlew :core:jvmTest
 ./gradlew :text:jvmTest
 ./gradlew :markdown:jvmTest
 
-# Full multiplatform tests (slower — runs native, JS, WASM)
+# Full multiplatform tests (slower — native, JS, WASM)
 ./gradlew allTests
-
-# Run JMH benchmarks
-./gradlew :benchmark:jmh
-
-# Run profiling script
-./gradlew :benchmark:run
 
 # Run Compose desktop demo
 ./gradlew :compose-renderer:run
 ```
+
+## License
+
+[MIT](LICENSE)
