@@ -1,13 +1,13 @@
 package parsek.markdown.parser
 
 import parsek.markdown.ast.Block
-import parsek.markdown.ast.Document
+import parsek.markdown.ast.MarkdownDocument
 import parsek.markdown.ast.Inline
 import parsek.markdown.lexer.splitLines
 import parsek.markdown.scanner.scanDocument
 
 /**
- * Parses a markdown string into a [Document] AST.
+ * Parses a markdown string into a [MarkdownDocument] AST.
  *
  * Three-pass pipeline:
  *   1. **Block pass**: Scan → Split lines → Recursive line parsing → blocks with stub inlines
@@ -15,12 +15,12 @@ import parsek.markdown.scanner.scanDocument
  *   3. **Inline pass**: Replace stub inlines with fully parsed inline content using resolver
  */
 /**
- * Parses a markdown string into a [Document] AST.
+ * Parses a markdown string into a [MarkdownDocument] AST.
  *
  * @param gfm when `true`, enables GFM extensions (task lists, strikethrough,
  *   tables, extended autolinks). When `false`, only standard CommonMark is used.
  */
-fun parseDocument(text: String, gfm: Boolean = true): Document {
+fun parseDocument(text: String, gfm: Boolean = true): MarkdownDocument {
     // Stage 1: Scan characters into lexemes
     val lexemes = scanDocument(text)
 
@@ -41,7 +41,7 @@ fun parseDocument(text: String, gfm: Boolean = true): Document {
     }
 
     val resolved = resolveInlines(cleanedBlocks, resolver, gfm)
-    return Document(resolved)
+    return MarkdownDocument(resolved)
 }
 
 /**

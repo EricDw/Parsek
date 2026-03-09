@@ -1,7 +1,7 @@
 package parsek.markdown
 
 import parsek.markdown.ast.Block
-import parsek.markdown.ast.Document
+import parsek.markdown.ast.MarkdownDocument
 import parsek.markdown.ast.Inline
 import parsek.markdown.filterDisallowedRawHtml
 
@@ -11,7 +11,7 @@ import parsek.markdown.filterDisallowedRawHtml
  * @param gfmTagFilter when `true`, applies the GFM disallowed raw HTML filter
  *   (§6.11) to HTML blocks and inline raw HTML.
  */
-fun renderHtml(document: Document, gfmTagFilter: Boolean = false): String {
+fun renderHtml(document: MarkdownDocument, gfmTagFilter: Boolean = false): String {
     val sb = StringBuilder()
     renderBlocks(sb, document.blocks, gfmTagFilter)
     return sb.toString()

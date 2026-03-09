@@ -9,4 +9,4 @@ package parsek.markdown.ast
  *
  * @property blocks the top-level block nodes of the document.
  */
-data class Document(val blocks: List<Block>)
+data class MarkdownDocument(val blocks: List<Block>)

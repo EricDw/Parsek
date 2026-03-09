@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import parsek.markdown.ast.Block
-import parsek.markdown.ast.Document
+import parsek.markdown.ast.MarkdownDocument
 import parsek.markdown.ast.Inline
 import parsek.markdown.highlight.Span
 
@@ -42,7 +42,7 @@ import parsek.markdown.highlight.Span
 // ---------------------------------------------------------------------------
 
 /**
- * Renders a parsed CommonMark [Document] as Compose UI.
+ * Renders a parsed CommonMark [MarkdownDocument] as Compose UI.
  *
  * @param document the parsed document AST.
  * @param spans highlight spans (currently unused — reserved for future
@@ -52,7 +52,7 @@ import parsek.markdown.highlight.Span
  */
 @Composable
 fun MarkdownRenderer(
-    document: Document,
+    document: MarkdownDocument,
     spans: List<Span> = emptyList(),
     theme: HighlightTheme = HighlightTheme.Default,
     modifier: Modifier = Modifier,
