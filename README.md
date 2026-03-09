@@ -1,3 +1,5 @@
+[![Deploy API Docs](https://github.com/EricDw/Parsek/actions/workflows/docs.yml/badge.svg)](https://github.com/EricDw/Parsek/actions/workflows/docs.yml)
+
 # Parsek
 
 A Kotlin Multiplatform parser combinator library — compose small parsers into
