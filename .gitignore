@@ -43,4 +43,4 @@ bin/
 local.properties
 
 ### Claude Code ###
-.claude/plans/
+.ai/plans/

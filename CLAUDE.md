@@ -31,21 +31,21 @@ Dependencies: `:core` ← `:text` ← `:markdown` ← `:compose-renderer` / `:be
 
 ### Key files
 
-| File | Description |
-|------|-------------|
-| `core/src/commonMain/kotlin/parsek/Parser.kt` | `Parser<I,O,U>` fun interface |
-| `core/src/commonMain/kotlin/parsek/ParserInput.kt` | Immutable position-aware token view |
-| `core/src/commonMain/kotlin/parsek/ParseResult.kt` | `Success` / `Failure` sealed types |
-| `core/src/commonMain/kotlin/parsek/Parsers.kt` | All core combinators (`pSatisfy`, `pAnd`, `pOr`, …) |
-| `core/src/commonMain/kotlin/parsek/ParserOps.kt` | Operator/infix/extension-property sugar |
-| `text/src/commonMain/kotlin/parsek/text/TextParsers.kt` | `pChar`, `pString`, `pInt` |
-| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Block.kt` | 15 block-level AST types (incl. Table, TableRow, TableCell) |
-| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Inline.kt` | 12 inline-level AST types (incl. Strikethrough, ExtendedAutolink) |
-| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Document.kt` | Root `Document` type |
-| `markdown/src/commonMain/kotlin/parsek/markdown/parser/DocumentParser.kt` | `parseDocument()` entry point |
-| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/Scanner.kt` | `scanDocument()` syntax highlighting |
-| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/TokenType.kt` | 30 semantic token types (incl. GFM extensions) |
-| `compose-renderer/src/commonMain/kotlin/parsek/markdown/renderer/MarkdownRenderer.kt` | Compose rendering |
+| File                                                                                  | Description                                                       |
+|---------------------------------------------------------------------------------------|-------------------------------------------------------------------|
+| `core/src/commonMain/kotlin/parsek/Parser.kt`                                         | `Parser<I,O,U>` fun interface                                     |
+| `core/src/commonMain/kotlin/parsek/ParserInput.kt`                                    | Immutable position-aware token view                               |
+| `core/src/commonMain/kotlin/parsek/ParseResult.kt`                                    | `Success` / `Failure` sealed types                                |
+| `core/src/commonMain/kotlin/parsek/Parsers.kt`                                        | All core combinators (`pSatisfy`, `pAnd`, `pOr`, …)               |
+| `core/src/commonMain/kotlin/parsek/ParserOps.kt`                                      | Operator/infix/extension-property sugar                           |
+| `text/src/commonMain/kotlin/parsek/text/TextParsers.kt`                               | `pChar`, `pString`, `pInt`                                        |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Block.kt`                         | 15 block-level AST types (incl. Table, TableRow, TableCell)       |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Inline.kt`                        | 12 inline-level AST types (incl. Strikethrough, ExtendedAutolink) |
+| `markdown/src/commonMain/kotlin/parsek/markdown/ast/Document.kt`                      | Root `Document` type                                              |
+| `markdown/src/commonMain/kotlin/parsek/markdown/parser/DocumentParser.kt`             | `parseDocument()` entry point                                     |
+| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/Scanner.kt`                 | `scanDocument()` syntax highlighting                              |
+| `markdown/src/commonMain/kotlin/parsek/markdown/highlight/TokenType.kt`               | 30 semantic token types (incl. GFM extensions)                    |
+| `compose-renderer/src/commonMain/kotlin/parsek/markdown/renderer/MarkdownRenderer.kt` | Compose rendering                                                 |
 
 ---
 
@@ -78,46 +78,46 @@ Gradle 8.11 + Kotlin Multiplatform 2.1.0.
 
 These are the stable, explicit API. Never remove them in favour of operators alone.
 
-| Function | Behaviour |
-|----------|-----------|
-| `pSatisfy(pred)` | Consume one token if predicate holds |
-| `pEof()` | Succeed only at end of input |
-| `pAny()` | Consume any single token |
-| `pAnd(a, b)` | Sequence — run `a` then `b`, return `Pair` |
-| `pOr(a, b)` | Ordered choice — try `a`, fall back to `b` |
-| `pMap(p) { }` | Transform success value |
-| `pBind(p) { }` | Flat-map success value to a second parser |
-| `pRepeat(n, p)` | Run `p` exactly `n` times |
-| `pSequence(list)` | Run each parser in a list in order |
-| `pMany(p)` | Zero-or-more |
-| `pMany1(p)` | One-or-more |
-| `pOptional(p)` | Zero-or-one (returns nullable) |
-| `pLookAhead(p)` | Positive lookahead — match without consuming |
-| `pNot(p)` | Negative lookahead — succeed only if `p` fails |
-| `pLabel(p, msg)` | Replace failure message |
-| `pSepBy(item, sep)` | Zero-or-more items separated by delimiter |
-| `pSepBy1(item, sep)` | One-or-more items separated by delimiter |
+| Function                       | Behaviour                                        |
+|--------------------------------|--------------------------------------------------|
+| `pSatisfy(pred)`               | Consume one token if predicate holds             |
+| `pEof()`                       | Succeed only at end of input                     |
+| `pAny()`                       | Consume any single token                         |
+| `pAnd(a, b)`                   | Sequence — run `a` then `b`, return `Pair`       |
+| `pOr(a, b)`                    | Ordered choice — try `a`, fall back to `b`       |
+| `pMap(p) { }`                  | Transform success value                          |
+| `pBind(p) { }`                 | Flat-map success value to a second parser        |
+| `pRepeat(n, p)`                | Run `p` exactly `n` times                        |
+| `pSequence(list)`              | Run each parser in a list in order               |
+| `pMany(p)`                     | Zero-or-more                                     |
+| `pMany1(p)`                    | One-or-more                                      |
+| `pOptional(p)`                 | Zero-or-one (returns nullable)                   |
+| `pLookAhead(p)`                | Positive lookahead — match without consuming     |
+| `pNot(p)`                      | Negative lookahead — succeed only if `p` fails   |
+| `pLabel(p, msg)`               | Replace failure message                          |
+| `pSepBy(item, sep)`            | Zero-or-more items separated by delimiter        |
+| `pSepBy1(item, sep)`           | One-or-more items separated by delimiter         |
 | `pBetween(open, close, inner)` | Parse `inner` wrapped between `open` and `close` |
 
 ### Operator/infix sugar (`ParserOps.kt`)
 
 These desugar to the named functions above. Add new sugar here; keep `Parsers.kt` clean.
 
-| Expression | Desugars to |
-|------------|-------------|
-| `a + b` | `pAnd(a, b)` |
-| `a * n` | `pRepeat(n, a)` |
-| `!a` | `pNot(a)` |
-| `a or b` | `pOr(a, b)` |
+| Expression      | Desugars to        |
+|-----------------|--------------------|
+| `a + b`         | `pAnd(a, b)`       |
+| `a * n`         | `pRepeat(n, a)`    |
+| `!a`            | `pNot(a)`          |
+| `a or b`        | `pOr(a, b)`        |
 | `a label "msg"` | `pLabel(a, "msg")` |
-| `a.optional` | `pOptional(a)` |
-| `a.many` | `pMany(a)` |
-| `a.many1` | `pMany1(a)` |
-| `a.lookAhead` | `pLookAhead(a)` |
-| `a.map { }` | `pMap(a) { }` |
-| `a.bind { }` | `pBind(a) { }` |
-| `a sepBy b` | `pSepBy(a, b)` |
-| `a sepBy1 b` | `pSepBy1(a, b)` |
+| `a.optional`    | `pOptional(a)`     |
+| `a.many`        | `pMany(a)`         |
+| `a.many1`       | `pMany1(a)`        |
+| `a.lookAhead`   | `pLookAhead(a)`    |
+| `a.map { }`     | `pMap(a) { }`      |
+| `a.bind { }`    | `pBind(a) { }`     |
+| `a sepBy b`     | `pSepBy(a, b)`     |
+| `a sepBy1 b`    | `pSepBy1(a, b)`    |
 
 Operator precedence (high → low): `!` · `*` · `+` · infix (`or`, `label`, `sepBy`, …) · extension functions.
 This means sequence (`+`) binds tighter than choice (`or`) without extra parentheses.
@@ -191,6 +191,14 @@ return Parser { input ->
 2. Add operator/infix sugar to `ParserOps.kt` if appropriate
 3. Add tests in `core/src/commonTest/kotlin/parsek/`
 4. Follow the `PSatisfyTest` / `PEofTest` test structure
+
+---
+
+## Plans
+
+Implementation plans and design documents live in the `./ai/plans/` directory at the
+repository root. This folder is git-ignored. Use it for task planning, architecture
+notes, and work-in-progress design docs.
 
 ---
 
